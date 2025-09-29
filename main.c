@@ -197,11 +197,17 @@ int main(void)
         if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_V)) {
             const char* clip = GetClipboardText();
             if (clip && strlen(clip) > 0 && boxCount < MAX_BOXES) {
+                char* path = strdup(clip);
+                /* Trim quotes if present */
+                if (path[0] == '"' && path[strlen(path)-1] == '"') {
+                    path[strlen(path)-1] = '\0';
+                    path++;
+                }
                 /* Check if it's an image file path */
                 int isImageFile = 0;
-                const char* ext = strrchr(clip, '.');
+                const char* ext = strrchr(path, '.');
                 if (ext && (strcmp(ext, ".png") == 0 || strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0 || strcmp(ext, ".bmp") == 0)) {
-                    Image img = LoadImage(clip);
+                    Image img = LoadImage(path);
                     if (IsImageReady(img)) {
                         Texture2D tex = LoadTextureFromImage(img);
                         boxes[boxCount].x = (int)mousePos.x;
@@ -223,7 +229,7 @@ int main(void)
                     boxes[boxCount].width = 200;
                     boxes[boxCount].height = 50;
                     boxes[boxCount].type = BOX_TEXT;
-                    boxes[boxCount].content.text = strdup(clip);
+                    boxes[boxCount].content.text = path;
                     boxes[boxCount].isSelected = 0;
                     boxCount++;
                 }

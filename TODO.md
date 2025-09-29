@@ -51,11 +51,7 @@
 - [ ] Implement segment/line drawing tool
 
 ## Low Priority - Polish and Performance
-- [ ] Add proper memory management (free textures, strings on box deletion)
-- [ ] Optimize rendering (only redraw changed areas)
-- [ ] Add undo/redo functionality
-- [ ] Implement file save/load for canvas state
-- [ ] Add more drawing tools (eraser, colors, etc.)
+- [x] Add undo/redo functionality
 - [ ] Improve UI (tool selection UI, status bar)
 - [ ] Add keyboard shortcuts for all tools
 - [ ] Support multiple selection of boxes

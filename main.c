@@ -110,8 +110,8 @@ void FreeSnapshot(CanvasSnapshot* snapshot);
 void CaptureSnapshot(CanvasSnapshot* snapshot, Box* boxes, int boxCount, int selectedBox);
 void PushHistoryState(Box* boxes, int boxCount, int selectedBox);
 void RestoreSnapshotState(Box* boxes, int* boxCount, int* selectedBox, int targetIndex);
-void PerformUndo(Box* boxes, int* boxCount, int* selectedBox);
-void PerformRedo(Box* boxes, int* boxCount, int* selectedBox);
+int PerformUndo(Box* boxes, int* boxCount, int* selectedBox);
+int PerformRedo(Box* boxes, int* boxCount, int* selectedBox);
 
 static CanvasSnapshot historyStates[MAX_HISTORY];
 static int historyCount = 0;
@@ -1159,6 +1159,9 @@ int main(void)
 
         prevMousePos = mousePos;
 
+    int ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+    int shiftDown = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+
         if (!showClearConfirm) {
             if (IsKeyPressed(KEY_S)) {
                 currentTool = TOOL_SELECT;
@@ -1188,18 +1191,42 @@ int main(void)
                 currentTool = TOOL_CIRCLE;
             }
 
-            if (IsKeyDown(KEY_LEFT_CONTROL)) {
-                if (IsKeyPressed(KEY_Z)) {
-                    PerformUndo(boxes, &boxCount, &selectedBox);
-                }
-                if (IsKeyPressed(KEY_Y)) {
-                    PerformRedo(boxes, &boxCount, &selectedBox);
+            if (ctrlDown) {
+                int pressedZ = IsKeyPressed(KEY_Z);
+                int pressedY = IsKeyPressed(KEY_Y);
+                int pressedW = IsKeyPressed(KEY_W);  /* AZERTY keyboards map Ctrl+Z to this physical key */
+
+                int undoCombo = pressedZ || pressedW;
+                int redoCombo = pressedY || (shiftDown && undoCombo);
+
+                if (redoCombo) {
+                    if (editingBoxIndex >= 0) {
+                        StopTextEditAndRecord(boxes, boxCount, selectedBox);
+                    }
+                    if (PerformRedo(boxes, &boxCount, &selectedBox)) {
+                        snprintf(statusMessage, sizeof(statusMessage), "Redo");
+                        statusMessageTimer = 1.2f;
+                    } else {
+                        snprintf(statusMessage, sizeof(statusMessage), "Nothing to redo");
+                        statusMessageTimer = 1.2f;
+                    }
+                } else if (undoCombo) {
+                    if (editingBoxIndex >= 0) {
+                        StopTextEditAndRecord(boxes, boxCount, selectedBox);
+                    }
+                    if (PerformUndo(boxes, &boxCount, &selectedBox)) {
+                        snprintf(statusMessage, sizeof(statusMessage), "Undo");
+                        statusMessageTimer = 1.2f;
+                    } else {
+                        snprintf(statusMessage, sizeof(statusMessage), "Nothing to undo");
+                        statusMessageTimer = 1.2f;
+                    }
                 }
             }
         }
 
         /* Paste */
-        if (!showClearConfirm && IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_V)) {
+        if (!showClearConfirm && ctrlDown && IsKeyPressed(KEY_V)) {
             #ifdef _WIN32
             /* Check for image data first on Windows */
             if (WinClip_HasImage() && boxCount < MAX_BOXES) {
@@ -1736,16 +1763,20 @@ void RestoreSnapshotState(Box* boxes, int* boxCount, int* selectedBox, int targe
     suppressHistory = 0;
 }
 
-void PerformUndo(Box* boxes, int* boxCount, int* selectedBox) {
+int PerformUndo(Box* boxes, int* boxCount, int* selectedBox) {
     if (historyIndex > 0) {
         historyIndex--;
         RestoreSnapshotState(boxes, boxCount, selectedBox, historyIndex);
+        return 1;
     }
+    return 0;
 }
 
-void PerformRedo(Box* boxes, int* boxCount, int* selectedBox) {
+int PerformRedo(Box* boxes, int* boxCount, int* selectedBox) {
     if (historyIndex >= 0 && historyIndex < historyCount - 1) {
         historyIndex++;
         RestoreSnapshotState(boxes, boxCount, selectedBox, historyIndex);
+        return 1;
     }
+    return 0;
 }

@@ -21,6 +21,8 @@
 - Corrected render texture orientation for drawing outputs so released shapes match the live preview
 - Fixed toolbar rectangle/circle button mapping by binding buttons to explicit tool identifiers
 - Updated rectangle and circle tools to commit outline-only shapes for cleaner canvas composition
+- Wired Ctrl+Z/Ctrl+Y shortcuts (both control keys) to the history stack and finalize active text edits before undo/redo
+- Added Ctrl+Shift+Z redo and AZERTY-friendly Ctrl+Z detection with user feedback when history navigation is unavailable
 
 ## Major Technical Achievement: Windows Clipboard Solution
 ### Problem Solved

@@ -13,6 +13,7 @@
 - Resolved compilation issues by switching to C99 standard
 - **MAJOR BREAKTHROUGH**: **COMPLETELY RESOLVED Windows clipboard GLFW errors**
 - **IMPLEMENTED**: Full native Windows clipboard support with image pasting
+- Implemented canvas UX polish: text edit focus handling, live text sizing, resize handles for text & image boxes, contextual cursors
 
 ## Major Technical Achievement: Windows Clipboard Solution
 ### Problem Solved
@@ -40,7 +41,14 @@
 - **All clipboard functionality working perfectly**
 - Basic functionality works (window, mouse interaction, drawing)
 - Text, image, and drawing content types fully supported
+- Text boxes resize automatically during editing and can be resized manually with handles
+- Image boxes scale smoothly with resize handles and render using DrawTexturePro
 - **Production-ready clipboard implementation**
+
+## Next Steps
+- Allow text boxes to remain draggable at all times, including during edit mode, while keeping resize handles active when editing.
+- Add a top-of-canvas toolbar featuring pen and line tools, a simple color picker, move-to-top/bottom controls, export-to-clipboard, and clear-all (with confirmation).
+- Implement global undo/redo shortcuts via <kbd>Ctrl</kbd>+<kbd>Z</kbd> and <kbd>Ctrl</kbd>+<kbd>Y</kbd>.
 
 ## Verified Working
 - Image pasting tested: 249x170 pixel image successfully loaded

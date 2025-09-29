@@ -1,4 +1,17 @@
-desktop_app.exe
+# Local tooling and build artifacts
+/.claude/
+/desktop_app
+/desktop_app.exe
+/nul
+
+# Temporary archives
+/raylib-linux.tar.gz
+
+# Generated runtime directories
+/raylib-linux/
+
+# IDE cache
+/.vscode/desktop_app.exe
 raylib45/
 *.o
 *.tmp

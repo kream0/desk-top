@@ -19,8 +19,8 @@
   - [x] Default cursor for normal canvas interaction
 - [x] **Implement image resizing**: Add resize handles for image boxes
 - [x] **Implement text box resizing**: Add resize handles for text boxes
-- [ ] **Fix drawing color inversion**: Drawn shapes and line tool output appear inverted after releasing the mouse.
-- [ ] **Correct toolbar shape buttons**: Circle and rectangle buttons trigger the wrong tools; ensure they map to the intended shapes.
+- [x] **Fix drawing color inversion**: Drawn shapes and line tool output appear inverted after releasing the mouse.
+- [x] **Correct toolbar shape buttons**: Circle and rectangle buttons trigger the wrong tools; ensure they map to the intended shapes.
 - [x] **Enable editing-mode mobility**: Keep text boxes draggable during edit mode (dragging between handles) while preserving resize handles and current drag-anywhere behavior when not editing.
 - [x] **Add canvas toolbar**:
   - [x] Pen and line drawing tools with a simple color picker

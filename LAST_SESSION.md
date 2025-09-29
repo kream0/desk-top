@@ -18,6 +18,9 @@
 - Added a top toolbar with select/pen/line/rect/circle tools, color palette, layer ordering controls, export-to-clipboard, clear-all confirmation, and status messaging
 - Implemented freehand pen and segment drawing modes with live previews and texture-backed storage
 - Introduced snapshot-based undo/redo history with <kbd>Ctrl</kbd>+<kbd>Z</kbd>/<kbd>Ctrl</kbd>+<kbd>Y</kbd> covering creation, deletion, transforms, drawing, and clipboard pastes
+- Corrected render texture orientation for drawing outputs so released shapes match the live preview
+- Fixed toolbar rectangle/circle button mapping by binding buttons to explicit tool identifiers
+- Updated rectangle and circle tools to commit outline-only shapes for cleaner canvas composition
 
 ## Major Technical Achievement: Windows Clipboard Solution
 ### Problem Solved

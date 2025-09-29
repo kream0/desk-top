@@ -620,6 +620,7 @@ int main(void)
         float xCursor = TOOLBAR_PADDING;
 
         Rectangle toolButtons[5];
+        Tool toolOrder[5] = {TOOL_SELECT, TOOL_PEN, TOOL_SEGMENT, TOOL_RECT, TOOL_CIRCLE};
         const char* toolLabels[5] = {"Sel", "Pen", "Line", "Rect", "Circ"};
         for (int i = 0; i < 5; i++) {
             toolButtons[i] = (Rectangle){xCursor, TOOLBAR_PADDING, toolButtonWidth, buttonHeight};
@@ -692,7 +693,7 @@ int main(void)
 
                     for (int i = 0; i < 5; i++) {
                         if (CheckCollisionPointRec(mousePos, toolButtons[i])) {
-                            currentTool = (Tool)i;
+                            currentTool = toolOrder[i];
                             actionHandled = 1;
                             if (currentTool != TOOL_SELECT && editingBoxIndex >= 0) {
                                 StopTextEditAndRecord(boxes, boxCount, selectedBox);
@@ -969,7 +970,7 @@ int main(void)
                             RenderTexture2D rt = LoadRenderTexture(width, height);
                             BeginTextureMode(rt);
                             ClearBackground(BLANK);
-                            DrawRectangle(0, 0, width, height, currentDrawColor);
+                            DrawRectangleLines(0, 0, width, height, currentDrawColor);
                             EndTextureMode();
                             boxes[boxCount].x = x;
                             boxes[boxCount].y = y;
@@ -997,7 +998,7 @@ int main(void)
                             RenderTexture2D rt = LoadRenderTexture(width, height);
                             BeginTextureMode(rt);
                             ClearBackground(BLANK);
-                            DrawCircle(radius, radius, radius, currentDrawColor);
+                            DrawCircleLines(radius, radius, (float)radius, currentDrawColor);
                             EndTextureMode();
                             boxes[boxCount].x = x;
                             boxes[boxCount].y = y;
@@ -1331,7 +1332,7 @@ int main(void)
                     break;
                 case BOX_DRAWING:
                     {
-                        Rectangle source = {0.0f, 0.0f, (float)box->content.texture.width, (float)box->content.texture.height};
+                        Rectangle source = {0.0f, 0.0f, (float)box->content.texture.width, -(float)box->content.texture.height};
                         Rectangle dest = {(float)box->x, (float)box->y, (float)box->width, (float)box->height};
                         Vector2 origin = {0.0f, 0.0f};
                         DrawTexturePro(box->content.texture, source, dest, origin, 0.0f, WHITE);
@@ -1383,7 +1384,7 @@ int main(void)
         DrawLine(0, (int)TOOLBAR_HEIGHT, screenWidthCurrent, (int)TOOLBAR_HEIGHT, LIGHTGRAY);
 
         for (int i = 0; i < 5; i++) {
-            int isActive = (currentTool == (Tool)i);
+            int isActive = (currentTool == toolOrder[i]);
             Color fill = isActive ? Fade(SKYBLUE, 0.7f) : Fade(LIGHTGRAY, 0.5f);
             DrawRectangleRec(toolButtons[i], fill);
             DrawRectangleLinesEx(toolButtons[i], 1.0f, DARKGRAY);

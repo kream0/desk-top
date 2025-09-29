@@ -37,6 +37,8 @@ int main(void)
     const int screenWidth = 800;
     const int screenHeight = 600;
 
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+
     InitWindow(screenWidth, screenHeight, "Desktop Canvas App");
 
     Box boxes[MAX_BOXES];
@@ -87,6 +89,21 @@ int main(void)
                     startY = (int)mousePos.y;
                     isDrawing = 1;
                 }
+            } else {
+                /* check for resize */
+                Box* box = &boxes[selectedBox];
+                int nearRight = mousePos.x > box->x + box->width - 10;
+                int nearBottom = mousePos.y > box->y + box->height - 10;
+                if (nearRight && nearBottom) {
+                    resizeMode = 3; /* corner */
+                } else if (nearRight) {
+                    resizeMode = 1; /* right */
+                } else if (nearBottom) {
+                    resizeMode = 2; /* bottom */
+                } else {
+                    resizeMode = 0;
+                }
+                isDragging = 1;
             }
         }
 
@@ -99,6 +116,9 @@ int main(void)
             } else if (resizeMode == 1) {
                 boxes[selectedBox].width += (int)(mousePos.x - prevMousePos.x);
             } else if (resizeMode == 2) {
+                boxes[selectedBox].height += (int)(mousePos.y - prevMousePos.y);
+            } else if (resizeMode == 3) {
+                boxes[selectedBox].width += (int)(mousePos.x - prevMousePos.x);
                 boxes[selectedBox].height += (int)(mousePos.y - prevMousePos.y);
             }
         }
@@ -177,14 +197,36 @@ int main(void)
         if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_V)) {
             const char* clip = GetClipboardText();
             if (clip && strlen(clip) > 0 && boxCount < MAX_BOXES) {
-                boxes[boxCount].x = (int)mousePos.x;
-                boxes[boxCount].y = (int)mousePos.y;
-                boxes[boxCount].width = 200;
-                boxes[boxCount].height = 50;
-                boxes[boxCount].type = BOX_TEXT;
-                boxes[boxCount].content.text = strdup(clip);
-                boxes[boxCount].isSelected = 0;
-                boxCount++;
+                /* Check if it's an image file path */
+                int isImageFile = 0;
+                const char* ext = strrchr(clip, '.');
+                if (ext && (strcmp(ext, ".png") == 0 || strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0 || strcmp(ext, ".bmp") == 0)) {
+                    Image img = LoadImage(clip);
+                    if (IsImageReady(img)) {
+                        Texture2D tex = LoadTextureFromImage(img);
+                        boxes[boxCount].x = (int)mousePos.x;
+                        boxes[boxCount].y = (int)mousePos.y;
+                        boxes[boxCount].width = img.width;
+                        boxes[boxCount].height = img.height;
+                        boxes[boxCount].type = BOX_IMAGE;
+                        boxes[boxCount].content.texture = tex;
+                        boxes[boxCount].isSelected = 0;
+                        boxCount++;
+                        UnloadImage(img);
+                        isImageFile = 1;
+                    }
+                }
+                if (!isImageFile) {
+                    /* Treat as text */
+                    boxes[boxCount].x = (int)mousePos.x;
+                    boxes[boxCount].y = (int)mousePos.y;
+                    boxes[boxCount].width = 200;
+                    boxes[boxCount].height = 50;
+                    boxes[boxCount].type = BOX_TEXT;
+                    boxes[boxCount].content.text = strdup(clip);
+                    boxes[boxCount].isSelected = 0;
+                    boxCount++;
+                }
             }
         }
 

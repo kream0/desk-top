@@ -17,7 +17,15 @@ A GUI canvas application for manipulating media content using raylib.
 - C: Circle drawing tool
 - Mouse: Select, move, resize boxes; draw shapes
 - Delete: Remove selected box
-- Ctrl+V: Paste text
+- Ctrl+V: Paste text or image file path
+
+## Pasting Content
+
+- **Text**: Copy text and press Ctrl+V to create a text box
+- **Images**: Copy the file path of an image (.png, .jpg, .jpeg, .bmp) and press Ctrl+V to load and display the image
+- **Video/Audio**: Not yet implemented (planned for future versions)
+
+Note: Pasting actual image data from clipboard may cause warnings; use file paths for best results.
 
 ## Building
 
@@ -31,6 +39,12 @@ A GUI canvas application for manipulating media content using raylib.
 Download raylib from https://www.raylib.com/ and follow installation instructions, or use the provided raylib45 folder.
 
 Then compile with:
+
+```
+build.bat
+```
+
+Or manually:
 
 ```
 gcc main.c -o desktop_app -I"raylib45/raylib-4.5.0_win64_mingw-w64/include" -L"raylib45/raylib-4.5.0_win64_mingw-w64/lib" -lraylib -lm -std=c99 -lgdi32 -lwinmm

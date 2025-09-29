@@ -44,6 +44,12 @@ Then compile with:
 build.bat
 ```
 
+Or to build and run:
+
+```
+build-and-run.bat
+```
+
 Or manually:
 
 ```

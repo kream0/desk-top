@@ -14,6 +14,10 @@
 - **MAJOR BREAKTHROUGH**: **COMPLETELY RESOLVED Windows clipboard GLFW errors**
 - **IMPLEMENTED**: Full native Windows clipboard support with image pasting
 - Implemented canvas UX polish: text edit focus handling, live text sizing, resize handles for text & image boxes, contextual cursors
+- Enabled text boxes to stay draggable while in edit mode, preserving resize handles during inline editing
+- Added a top toolbar with select/pen/line/rect/circle tools, color palette, layer ordering controls, export-to-clipboard, clear-all confirmation, and status messaging
+- Implemented freehand pen and segment drawing modes with live previews and texture-backed storage
+- Introduced snapshot-based undo/redo history with <kbd>Ctrl</kbd>+<kbd>Z</kbd>/<kbd>Ctrl</kbd>+<kbd>Y</kbd> covering creation, deletion, transforms, drawing, and clipboard pastes
 
 ## Major Technical Achievement: Windows Clipboard Solution
 ### Problem Solved
@@ -43,14 +47,18 @@
 - Text, image, and drawing content types fully supported
 - Text boxes resize automatically during editing and can be resized manually with handles
 - Image boxes scale smoothly with resize handles and render using DrawTexturePro
+- Toolbar exposes drawing tools, color palette, layering controls, export-to-clipboard, and clear-all confirmation
+- Undo/redo history stack active with bounded snapshots and full resource restoration
 - **Production-ready clipboard implementation**
 
 ## Next Steps
-- Allow text boxes to remain draggable at all times, including during edit mode, while keeping resize handles active when editing.
-- Add a top-of-canvas toolbar featuring pen and line tools, a simple color picker, move-to-top/bottom controls, export-to-clipboard, and clear-all (with confirmation).
-- Implement global undo/redo shortcuts via <kbd>Ctrl</kbd>+<kbd>Z</kbd> and <kbd>Ctrl</kbd>+<kbd>Y</kbd>.
+- Polish the toolbar experience (hover states, icons, tooltips) and expose undo/redo controls visually.
+- Reduce undo/redo snapshot cost by deduplicating textures or capturing diffs for faster history navigation.
+- Expand text editing UX (click-to-place caret, range selection, formatting shortcuts).
 
 ## Verified Working
 - Image pasting tested: 249x170 pixel image successfully loaded
+- Undo/redo exercised across text edits, transforms, drawing creation, and clipboard pastes without resource leaks
+- Toolbar export-to-clipboard tested; resulting image re-pastes correctly into the canvas
 - No console errors during extended testing
 - Stable operation with mixed clipboard content

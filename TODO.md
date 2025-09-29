@@ -19,13 +19,15 @@
   - [x] Default cursor for normal canvas interaction
 - [x] **Implement image resizing**: Add resize handles for image boxes
 - [x] **Implement text box resizing**: Add resize handles for text boxes
-- [ ] **Enable editing-mode mobility**: Keep text boxes draggable during edit mode (dragging between handles) while preserving resize handles and current drag-anywhere behavior when not editing.
-- [ ] **Add canvas toolbar**:
-  - [ ] Pen and line drawing tools with a simple color picker
-  - [ ] Move to top / move to bottom buttons
-  - [ ] Export entire canvas to clipboard
-  - [ ] Clear all button with confirmation dialog
-- [ ] **Implement undo/redo shortcuts**: Support Ctrl+Z (undo) and Ctrl+Y (redo) across canvas actions.
+- [ ] **Fix drawing color inversion**: Drawn shapes and line tool output appear inverted after releasing the mouse.
+- [ ] **Correct toolbar shape buttons**: Circle and rectangle buttons trigger the wrong tools; ensure they map to the intended shapes.
+- [x] **Enable editing-mode mobility**: Keep text boxes draggable during edit mode (dragging between handles) while preserving resize handles and current drag-anywhere behavior when not editing.
+- [x] **Add canvas toolbar**:
+  - [x] Pen and line drawing tools with a simple color picker
+  - [x] Move to top / move to bottom buttons
+  - [x] Export entire canvas to clipboard
+  - [x] Clear all button with confirmation dialog
+- [x] **Implement undo/redo shortcuts**: Support Ctrl+Z (undo) and Ctrl+Y (redo) across canvas actions.
 
 ## Medium Priority - Enhanced Interactions
 - [x] **Double-click interactions**:

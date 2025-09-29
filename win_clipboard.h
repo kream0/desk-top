@@ -11,6 +11,7 @@ int WinClip_HasImage(void);
 char* WinClip_GetText(void);
 void* WinClip_GetImageData(int* width, int* height, int* channels);
 void WinClip_FreeData(void* data);
+int WinClip_SetImageRGBA(const unsigned char* data, int width, int height);
 
 #endif /* _WIN32 */
 

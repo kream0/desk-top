@@ -186,4 +186,68 @@ void WinClip_FreeData(void* data) {
     }
 }
 
+int WinClip_SetImageRGBA(const unsigned char* data, int width, int height) {
+    if (data == NULL || width <= 0 || height <= 0) {
+        return 0;
+    }
+
+    if (!OpenClipboard(NULL)) {
+        return 0;
+    }
+
+    if (!EmptyClipboard()) {
+        CloseClipboard();
+        return 0;
+    }
+
+    int rowStride = width * 4;
+    int imageDataSize = rowStride * height;
+    SIZE_T dibSize = sizeof(BITMAPINFOHEADER) + imageDataSize;
+
+    HGLOBAL hMem = GlobalAlloc(GHND, dibSize);
+    if (hMem == NULL) {
+        CloseClipboard();
+        return 0;
+    }
+
+    BITMAPINFOHEADER* header = (BITMAPINFOHEADER*)GlobalLock(hMem);
+    if (header == NULL) {
+        GlobalFree(hMem);
+        CloseClipboard();
+        return 0;
+    }
+
+    memset(header, 0, sizeof(BITMAPINFOHEADER));
+    header->biSize = sizeof(BITMAPINFOHEADER);
+    header->biWidth = width;
+    header->biHeight = -height; /* negative for top-down DIB */
+    header->biPlanes = 1;
+    header->biBitCount = 32;
+    header->biCompression = BI_RGB;
+    header->biSizeImage = imageDataSize;
+
+    unsigned char* dest = (unsigned char*)(header + 1);
+    for (int y = 0; y < height; y++) {
+        const unsigned char* srcRow = data + y * rowStride;
+        unsigned char* dstRow = dest + y * rowStride;
+        for (int x = 0; x < width; x++) {
+            dstRow[x * 4 + 0] = srcRow[x * 4 + 2]; /* B */
+            dstRow[x * 4 + 1] = srcRow[x * 4 + 1]; /* G */
+            dstRow[x * 4 + 2] = srcRow[x * 4 + 0]; /* R */
+            dstRow[x * 4 + 3] = srcRow[x * 4 + 3]; /* A */
+        }
+    }
+
+    GlobalUnlock(hMem);
+
+    if (SetClipboardData(CF_DIB, hMem) == NULL) {
+        GlobalFree(hMem);
+        CloseClipboard();
+        return 0;
+    }
+
+    CloseClipboard();
+    return 1;
+}
+
 #endif /* _WIN32 */

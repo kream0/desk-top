@@ -3,6 +3,10 @@
 #include <math.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include "win_clipboard.h"
+#endif
+
 #define MAX_BOXES 100
 
 typedef enum {
@@ -31,6 +35,30 @@ typedef struct {
     } content;
     int isSelected;
 } Box;
+
+const char* GetClipboardTextSafe(void) {
+    #ifdef _WIN32
+    /* Use our custom Windows clipboard implementation to avoid GLFW errors */
+    if (!WinClip_HasText()) {
+        return NULL;
+    }
+    /* WinClip_GetText returns allocated memory - caller should free it */
+    static char* lastClipText = NULL;
+    if (lastClipText) {
+        free(lastClipText);
+        lastClipText = NULL;
+    }
+    lastClipText = WinClip_GetText();
+    return lastClipText;
+    #else
+    /* On non-Windows platforms, use raylib's function */
+    const char* clip = GetClipboardText();
+    if (clip == NULL || strlen(clip) == 0) {
+        return NULL;
+    }
+    return clip;
+    #endif
+}
 
 int main(void)
 {
@@ -195,8 +223,50 @@ int main(void)
 
         /* Paste */
         if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_V)) {
-            const char* clip = GetClipboardText();
-            if (clip && strlen(clip) > 0 && boxCount < MAX_BOXES) {
+            #ifdef _WIN32
+            /* Check for image data first on Windows */
+            if (WinClip_HasImage() && boxCount < MAX_BOXES) {
+                int imgWidth, imgHeight, imgChannels;
+                void* imgData = WinClip_GetImageData(&imgWidth, &imgHeight, &imgChannels);
+
+                if (imgData != NULL) {
+                    /* Create an image from the clipboard data */
+                    Image img = {
+                        .data = imgData,
+                        .width = imgWidth,
+                        .height = imgHeight,
+                        .mipmaps = 1,
+                        .format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8
+                    };
+
+                    Texture2D tex = LoadTextureFromImage(img);
+
+                    boxes[boxCount].x = (int)mousePos.x;
+                    boxes[boxCount].y = (int)mousePos.y;
+                    boxes[boxCount].width = imgWidth;
+                    boxes[boxCount].height = imgHeight;
+                    boxes[boxCount].type = BOX_IMAGE;
+                    boxes[boxCount].content.texture = tex;
+                    boxes[boxCount].isSelected = 0;
+                    boxCount++;
+
+                    WinClip_FreeData(imgData);
+                } else {
+                    /* Fallback: create a text box indicating image paste failed */
+                    boxes[boxCount].x = (int)mousePos.x;
+                    boxes[boxCount].y = (int)mousePos.y;
+                    boxes[boxCount].width = 300;
+                    boxes[boxCount].height = 50;
+                    boxes[boxCount].type = BOX_TEXT;
+                    boxes[boxCount].content.text = strdup("(Image from clipboard - processing failed)");
+                    boxes[boxCount].isSelected = 0;
+                    boxCount++;
+                }
+            } else
+            #endif
+            {
+                const char* clip = GetClipboardTextSafe();
+                if (clip && strlen(clip) > 0 && boxCount < MAX_BOXES) {
                 char* path = strdup(clip);
                 /* Trim quotes if present */
                 if (path[0] == '"' && path[strlen(path)-1] == '"') {
@@ -232,6 +302,7 @@ int main(void)
                     boxes[boxCount].content.text = path;
                     boxes[boxCount].isSelected = 0;
                     boxCount++;
+                }
                 }
             }
         }

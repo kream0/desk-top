@@ -5,6 +5,8 @@
 ### Completed Work
 - Delivered audio boxes: clipboard path detection, waveform loading, undo-ready persistence, and space/double-click playback toggles with visual status cues.
 - Added playback UI styling with dynamic icons, filename display, and resilient fallbacks when the audio device is unavailable.
+- Ensured audio boxes render reliably even when playback assets can’t load, including placeholder UI, status messaging, and history restore support.
+- Added CF_HDROP clipboard ingestion so Windows file copies paste directly as image, audio, or path boxes with multi-file support.
 - Enabled per-text-box font sizing with Ctrl +/−/0 shortcuts, auto-resize, undo/redo integration, and live status feedback.
 - Refreshed text node visuals with lime selection outlines, blue editing focus rings, and a caret that tracks font scale.
 - Implemented full text selection and caret navigation: mouse placement, drag selection, Shift+Arrow, Home/End, and vertical movement with column memory.
@@ -20,10 +22,8 @@
 - Introduced a persistent status bar with contextual hints and audio readiness reporting, and excluded it from exported canvas captures.
 
 ### Known Issues
-- Pasted or drag-and-dropped audio files currently fail to render their boxes on the canvas.
 
 ### Next Steps
-- Investigate the audio box rendering regression so pasted or drag-and-dropped clips appear reliably.
 - Surface font size controls in the toolbar (slider or preset buttons) and preview the active size.
 - Provide toolbar typography controls (alignment, weight presets) now that font sizing is adjustable.
 - Replace text abbreviations with iconography and optional tooltips to further elevate the toolbar.

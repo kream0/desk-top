@@ -2,6 +2,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shellapi.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,6 +24,30 @@
 #endif
 
 #include "win_clipboard.h"
+
+static char* WinClip_WideToUtf8(const WCHAR* wideStr) {
+    if (wideStr == NULL) {
+        return NULL;
+    }
+
+    int required = WideCharToMultiByte(CP_UTF8, 0, wideStr, -1, NULL, 0, NULL, NULL);
+    if (required <= 0) {
+        return NULL;
+    }
+
+    char* utf8 = (char*)malloc((size_t)required);
+    if (utf8 == NULL) {
+        return NULL;
+    }
+
+    int written = WideCharToMultiByte(CP_UTF8, 0, wideStr, -1, utf8, required, NULL, NULL);
+    if (written <= 0) {
+        free(utf8);
+        return NULL;
+    }
+
+    return utf8;
+}
 
 int WinClip_HasText(void) {
     if (!OpenClipboard(NULL)) {
@@ -47,6 +72,17 @@ int WinClip_HasImage(void) {
 
     CloseClipboard();
     return hasImage;
+}
+
+int WinClip_HasFileDrop(void) {
+    if (!OpenClipboard(NULL)) {
+        return 0;
+    }
+
+    int hasDrop = IsClipboardFormatAvailable(CF_HDROP);
+
+    CloseClipboard();
+    return hasDrop;
 }
 
 char* WinClip_GetText(void) {
@@ -248,6 +284,105 @@ int WinClip_SetImageRGBA(const unsigned char* data, int width, int height) {
 
     CloseClipboard();
     return 1;
+}
+
+char** WinClip_GetFileDropList(int* count) {
+    if (count != NULL) {
+        *count = 0;
+    }
+
+    if (!OpenClipboard(NULL)) {
+        return NULL;
+    }
+
+    if (!IsClipboardFormatAvailable(CF_HDROP)) {
+        CloseClipboard();
+        return NULL;
+    }
+
+    HANDLE hData = GetClipboardData(CF_HDROP);
+    if (hData == NULL) {
+        CloseClipboard();
+        return NULL;
+    }
+
+    HDROP hDrop = (HDROP)GlobalLock(hData);
+    if (hDrop == NULL) {
+        CloseClipboard();
+        return NULL;
+    }
+
+    UINT fileCount = DragQueryFileW(hDrop, 0xFFFFFFFF, NULL, 0);
+    if (fileCount == 0) {
+        GlobalUnlock(hData);
+        CloseClipboard();
+        return NULL;
+    }
+
+    char** results = (char**)calloc(fileCount, sizeof(char*));
+    if (results == NULL) {
+        GlobalUnlock(hData);
+        CloseClipboard();
+        return NULL;
+    }
+
+    int collected = 0;
+    for (UINT i = 0; i < fileCount; ++i) {
+        UINT pathLen = DragQueryFileW(hDrop, i, NULL, 0);
+        if (pathLen == 0) {
+            continue;
+        }
+
+        WCHAR* widePath = (WCHAR*)malloc(((size_t)pathLen + 1) * sizeof(WCHAR));
+        if (widePath == NULL) {
+            continue;
+        }
+
+        if (DragQueryFileW(hDrop, i, widePath, pathLen + 1) == 0) {
+            free(widePath);
+            continue;
+        }
+
+        char* utf8Path = WinClip_WideToUtf8(widePath);
+        free(widePath);
+        if (utf8Path == NULL) {
+            continue;
+        }
+
+        results[collected++] = utf8Path;
+    }
+
+    GlobalUnlock(hData);
+    CloseClipboard();
+
+    if (collected == 0) {
+        free(results);
+        return NULL;
+    }
+
+    if (count != NULL) {
+        *count = collected;
+    }
+
+    if (collected < (int)fileCount) {
+        char** trimmed = (char**)realloc(results, (size_t)collected * sizeof(char*));
+        if (trimmed != NULL) {
+            results = trimmed;
+        }
+    }
+
+    return results;
+}
+
+void WinClip_FreeFileDropList(char** list, int count) {
+    if (list == NULL || count <= 0) {
+        return;
+    }
+
+    for (int i = 0; i < count; ++i) {
+        free(list[i]);
+    }
+    free(list);
 }
 
 #endif /* _WIN32 */

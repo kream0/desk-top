@@ -9,9 +9,10 @@
 - [x] Test basic functionality (window opens, mouse interaction works)
 - [x] Implement image pasting from clipboard (screenshots, browser images, etc.)
 - [x] Deliver canvas UX polish (live text sizing, focus handling, resize handles, contextual cursors)
+- [x] Add Windows CF_HDROP clipboard ingestion for copying files as canvas boxes
 
 ## High Priority - User Experience Improvements
-- [ ] **Fix audio box visibility**: Ensure pasted or drag-and-dropped audio files render on the canvas
+- [x] **Fix audio box visibility**: Ensure pasted or drag-and-dropped audio files render on the canvas
 - [x] **Fix text box sizing**: Auto-resize text boxes to fit content (currently fixed 200x50)
 - [x] **Implement text editing mode**: Double-click on canvas or text box to create/edit text
 - [x] **Add proper mouse cursors**:

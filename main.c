@@ -2017,15 +2017,147 @@ int main(void)
         }
 
         /* Paste */
-    if (!showClearConfirm && ctrlDown && IsKeyPressed(KEY_V) && editingBoxIndex < 0) {
-            #ifdef _WIN32
-            /* Check for image data first on Windows */
-            if (WinClip_HasImage() && boxCount < MAX_BOXES) {
+        if (!showClearConfirm && ctrlDown && IsKeyPressed(KEY_V) && editingBoxIndex < 0) {
+            int handledPaste = 0;
+#ifdef _WIN32
+            if (WinClip_HasFileDrop() && boxCount < MAX_BOXES) {
+                int dropCount = 0;
+                char** dropList = WinClip_GetFileDropList(&dropCount);
+                if (dropList != NULL && dropCount > 0) {
+                    int added = 0;
+                    int limited = 0;
+                    for (int i = 0; i < dropCount && boxCount < MAX_BOXES; ++i) {
+                        const char* filePath = dropList[i];
+                        if (filePath == NULL || filePath[0] == '\0') {
+                            continue;
+                        }
+
+                        int baseX = (int)mousePos.x + added * 24;
+                        int baseY = (int)mousePos.y + added * 24;
+                        int created = 0;
+                        const char* ext = strrchr(filePath, '.');
+
+                        if (ext != NULL && (EqualsIgnoreCase(ext, ".png") || EqualsIgnoreCase(ext, ".jpg") ||
+                                            EqualsIgnoreCase(ext, ".jpeg") || EqualsIgnoreCase(ext, ".bmp"))) {
+                            Image img = LoadImage(filePath);
+                            if (IsImageReady(img)) {
+                                Texture2D tex = LoadTextureFromImage(img);
+                                boxes[boxCount].x = baseX;
+                                boxes[boxCount].y = baseY;
+                                boxes[boxCount].width = img.width;
+                                boxes[boxCount].height = img.height;
+                                boxes[boxCount].type = BOX_IMAGE;
+                                boxes[boxCount].content.texture = tex;
+                                boxes[boxCount].filePath = NULL;
+                                boxes[boxCount].isSelected = 0;
+                                boxCount++;
+                                selectedBox = boxCount - 1;
+                                SelectBox(boxes, boxCount, selectedBox);
+                                PushHistoryState(boxes, boxCount, selectedBox);
+                                created = 1;
+                            }
+                            UnloadImage(img);
+                        } else if (ext != NULL && (EqualsIgnoreCase(ext, ".wav") || EqualsIgnoreCase(ext, ".ogg") ||
+                                                     EqualsIgnoreCase(ext, ".mp3") || EqualsIgnoreCase(ext, ".flac"))) {
+                            char* storedPath = strdup(filePath);
+                            if (storedPath != NULL) {
+                                Sound sound = (Sound){0};
+                                int soundReady = 0;
+                                if (audioDeviceReady) {
+                                    Sound loaded = LoadSound(filePath);
+                                    if (IsSoundReady(loaded)) {
+                                        sound = loaded;
+                                        soundReady = 1;
+                                    } else {
+                                        UnloadSound(loaded);
+                                    }
+                                }
+
+                                boxes[boxCount].x = baseX;
+                                boxes[boxCount].y = baseY;
+                                boxes[boxCount].width = AUDIO_BOX_WIDTH;
+                                boxes[boxCount].height = AUDIO_BOX_HEIGHT;
+                                boxes[boxCount].type = BOX_AUDIO;
+                                boxes[boxCount].content.sound = sound;
+                                boxes[boxCount].filePath = storedPath;
+                                boxes[boxCount].fontSize = 0;
+                                boxes[boxCount].textColor = BLACK;
+                                boxes[boxCount].isSelected = 0;
+                                boxCount++;
+                                selectedBox = boxCount - 1;
+                                SelectBox(boxes, boxCount, selectedBox);
+                                PushHistoryState(boxes, boxCount, selectedBox);
+                                created = 1;
+
+                                const char* audioName = ExtractFileName(storedPath);
+                                if (soundReady) {
+                                    snprintf(statusMessage, sizeof(statusMessage), "Loaded %s", audioName);
+                                    statusMessageTimer = 1.6f;
+                                } else if (!audioDeviceReady) {
+                                    snprintf(statusMessage, sizeof(statusMessage), "Audio placeholder: device unavailable");
+                                    statusMessageTimer = 2.0f;
+                                } else {
+                                    snprintf(statusMessage, sizeof(statusMessage), "Audio placeholder: failed to load %s", audioName);
+                                    statusMessageTimer = 2.0f;
+                                }
+                            }
+                        }
+
+                        if (!created) {
+                            int textWidth = 0;
+                            int textHeight = 0;
+                            CalculateTextBoxSize(filePath, DEFAULT_FONT_SIZE, &textWidth, &textHeight);
+                            char* textCopy = strdup(filePath);
+                            if (textCopy != NULL) {
+                                boxes[boxCount].x = baseX;
+                                boxes[boxCount].y = baseY;
+                                boxes[boxCount].width = textWidth;
+                                boxes[boxCount].height = textHeight;
+                                boxes[boxCount].type = BOX_TEXT;
+                                boxes[boxCount].content.text = textCopy;
+                                boxes[boxCount].fontSize = DEFAULT_FONT_SIZE;
+                                boxes[boxCount].textColor = currentDrawColor;
+                                boxes[boxCount].filePath = NULL;
+                                boxes[boxCount].isSelected = 0;
+                                boxCount++;
+                                selectedBox = boxCount - 1;
+                                SelectBox(boxes, boxCount, selectedBox);
+                                PushHistoryState(boxes, boxCount, selectedBox);
+                                created = 1;
+                            }
+                        }
+
+                        if (created) {
+                            added++;
+                        }
+                    }
+
+                    if (dropCount > 0 && boxCount >= MAX_BOXES) {
+                        limited = 1;
+                    }
+
+                    if (added > 0) {
+                        handledPaste = 1;
+                        if (limited) {
+                            snprintf(statusMessage, sizeof(statusMessage), "Imported %d file%s (canvas full)", added, added == 1 ? "" : "s");
+                            statusMessageTimer = 2.0f;
+                        } else if (statusMessageTimer <= 0.0f) {
+                            snprintf(statusMessage, sizeof(statusMessage), "Imported %d file%s", added, added == 1 ? "" : "s");
+                            statusMessageTimer = 1.8f;
+                        }
+                    }
+
+                    WinClip_FreeFileDropList(dropList, dropCount);
+                } else if (dropList != NULL) {
+                    WinClip_FreeFileDropList(dropList, dropCount);
+                }
+            }
+
+            if (!handledPaste && WinClip_HasImage() && boxCount < MAX_BOXES) {
                 int imgWidth, imgHeight, imgChannels;
                 void* imgData = WinClip_GetImageData(&imgWidth, &imgHeight, &imgChannels);
 
                 if (imgData != NULL) {
-                    /* Create an image from the clipboard data */
                     Image img = {
                         .data = imgData,
                         .width = imgWidth,
@@ -2050,8 +2182,8 @@ int main(void)
                     PushHistoryState(boxes, boxCount, selectedBox);
 
                     WinClip_FreeData(imgData);
+                    handledPaste = 1;
                 } else {
-                    /* Fallback: create a text box indicating image paste failed */
                     const char* errorText = "(Image from clipboard - processing failed)";
                     int textWidth, textHeight;
                     CalculateTextBoxSize(errorText, DEFAULT_FONT_SIZE, &textWidth, &textHeight);
@@ -2070,101 +2202,114 @@ int main(void)
                     selectedBox = boxCount - 1;
                     SelectBox(boxes, boxCount, selectedBox);
                     PushHistoryState(boxes, boxCount, selectedBox);
+                    handledPaste = 1;
                 }
-            } else
-            #endif
-            {
+            }
+#endif
+
+            if (!handledPaste) {
                 const char* clip = GetClipboardTextSafe();
                 if (clip && strlen(clip) > 0 && boxCount < MAX_BOXES) {
-                char* path = DuplicateSanitizedPath(clip);
-                int handled = 0;
-                if (path && path[0] != '\0') {
-                    const char* ext = strrchr(path, '.');
-                    if (ext != NULL) {
-                        if (EqualsIgnoreCase(ext, ".png") || EqualsIgnoreCase(ext, ".jpg") ||
-                            EqualsIgnoreCase(ext, ".jpeg") || EqualsIgnoreCase(ext, ".bmp")) {
-                            Image img = LoadImage(path);
-                            if (IsImageReady(img)) {
-                                Texture2D tex = LoadTextureFromImage(img);
-                                boxes[boxCount].x = (int)mousePos.x;
-                                boxes[boxCount].y = (int)mousePos.y;
-                                boxes[boxCount].width = img.width;
-                                boxes[boxCount].height = img.height;
-                                boxes[boxCount].type = BOX_IMAGE;
-                                boxes[boxCount].content.texture = tex;
-                                boxes[boxCount].filePath = NULL;
-                                boxes[boxCount].isSelected = 0;
-                                boxCount++;
-                                UnloadImage(img);
-                                handled = 1;
-                                selectedBox = boxCount - 1;
-                                SelectBox(boxes, boxCount, selectedBox);
-                                PushHistoryState(boxes, boxCount, selectedBox);
-                            }
-                        } else if (EqualsIgnoreCase(ext, ".wav") || EqualsIgnoreCase(ext, ".ogg") ||
-                                   EqualsIgnoreCase(ext, ".mp3") || EqualsIgnoreCase(ext, ".flac")) {
-                            if (audioDeviceReady) {
-                                Sound sound = LoadSound(path);
-                                if (IsSoundReady(sound)) {
+                    char* path = DuplicateSanitizedPath(clip);
+                    int handled = 0;
+                    if (path && path[0] != '\0') {
+                        const char* ext = strrchr(path, '.');
+                        if (ext != NULL) {
+                            if (EqualsIgnoreCase(ext, ".png") || EqualsIgnoreCase(ext, ".jpg") ||
+                                EqualsIgnoreCase(ext, ".jpeg") || EqualsIgnoreCase(ext, ".bmp")) {
+                                Image img = LoadImage(path);
+                                if (IsImageReady(img)) {
+                                    Texture2D tex = LoadTextureFromImage(img);
                                     boxes[boxCount].x = (int)mousePos.x;
                                     boxes[boxCount].y = (int)mousePos.y;
-                                    boxes[boxCount].width = AUDIO_BOX_WIDTH;
-                                    boxes[boxCount].height = AUDIO_BOX_HEIGHT;
-                                    boxes[boxCount].type = BOX_AUDIO;
-                                    boxes[boxCount].content.sound = sound;
-                                    boxes[boxCount].filePath = path;
-                                    boxes[boxCount].fontSize = 0;
-                                    boxes[boxCount].textColor = BLACK;
+                                    boxes[boxCount].width = img.width;
+                                    boxes[boxCount].height = img.height;
+                                    boxes[boxCount].type = BOX_IMAGE;
+                                    boxes[boxCount].content.texture = tex;
+                                    boxes[boxCount].filePath = NULL;
                                     boxes[boxCount].isSelected = 0;
                                     boxCount++;
+                                    UnloadImage(img);
                                     handled = 1;
                                     selectedBox = boxCount - 1;
                                     SelectBox(boxes, boxCount, selectedBox);
                                     PushHistoryState(boxes, boxCount, selectedBox);
-                                    snprintf(statusMessage, sizeof(statusMessage), "Loaded %s", ExtractFileName(path));
-                                    statusMessageTimer = 1.6f;
-                                } else {
-                                    UnloadSound(sound);
-                                    snprintf(statusMessage, sizeof(statusMessage), "Failed to load %s", ExtractFileName(path));
-                                    statusMessageTimer = 1.8f;
                                 }
-                            } else {
-                                snprintf(statusMessage, sizeof(statusMessage), "Audio device unavailable");
-                                statusMessageTimer = 1.8f;
+                            } else if (EqualsIgnoreCase(ext, ".wav") || EqualsIgnoreCase(ext, ".ogg") ||
+                                       EqualsIgnoreCase(ext, ".mp3") || EqualsIgnoreCase(ext, ".flac")) {
+                                Sound sound = {0};
+                                int soundReady = 0;
+                                if (audioDeviceReady) {
+                                    Sound loaded = LoadSound(path);
+                                    if (IsSoundReady(loaded)) {
+                                        sound = loaded;
+                                        soundReady = 1;
+                                    } else {
+                                        UnloadSound(loaded);
+                                    }
+                                }
+
+                                boxes[boxCount].x = (int)mousePos.x;
+                                boxes[boxCount].y = (int)mousePos.y;
+                                boxes[boxCount].width = AUDIO_BOX_WIDTH;
+                                boxes[boxCount].height = AUDIO_BOX_HEIGHT;
+                                boxes[boxCount].type = BOX_AUDIO;
+                                boxes[boxCount].content.sound = sound;
+                                boxes[boxCount].filePath = path;
+                                boxes[boxCount].fontSize = 0;
+                                boxes[boxCount].textColor = BLACK;
+                                boxes[boxCount].isSelected = 0;
+                                boxCount++;
+                                handled = 1;
+                                selectedBox = boxCount - 1;
+                                SelectBox(boxes, boxCount, selectedBox);
+                                PushHistoryState(boxes, boxCount, selectedBox);
+
+                                const char* audioName = ExtractFileName(path);
+
+                                if (soundReady) {
+                                    snprintf(statusMessage, sizeof(statusMessage), "Loaded %s", audioName);
+                                    statusMessageTimer = 1.6f;
+                                } else if (!audioDeviceReady) {
+                                    snprintf(statusMessage, sizeof(statusMessage), "Audio placeholder: device unavailable");
+                                    statusMessageTimer = 2.0f;
+                                } else {
+                                    snprintf(statusMessage, sizeof(statusMessage), "Audio placeholder: failed to load %s", audioName);
+                                    statusMessageTimer = 2.0f;
+                                }
                             }
                         }
                     }
-                }
 
-                if (!handled) {
-                    const char* textToUse = path ? path : clip;
-                    char* textBuffer = path ? path : strdup(textToUse);
-                    if (textBuffer != NULL) {
-                        int textWidth, textHeight;
-                        CalculateTextBoxSize(textBuffer, DEFAULT_FONT_SIZE, &textWidth, &textHeight);
+                    if (!handled) {
+                        const char* textToUse = path ? path : clip;
+                        char* textBuffer = path ? path : strdup(textToUse);
+                        if (textBuffer != NULL) {
+                            int textWidth, textHeight;
+                            CalculateTextBoxSize(textBuffer, DEFAULT_FONT_SIZE, &textWidth, &textHeight);
 
-                        boxes[boxCount].x = (int)mousePos.x;
-                        boxes[boxCount].y = (int)mousePos.y;
-                        boxes[boxCount].width = textWidth;
-                        boxes[boxCount].height = textHeight;
-                        boxes[boxCount].type = BOX_TEXT;
-                        boxes[boxCount].content.text = textBuffer;
-                        boxes[boxCount].fontSize = DEFAULT_FONT_SIZE;
-                        boxes[boxCount].textColor = currentDrawColor;
-                        boxes[boxCount].filePath = NULL;
-                        boxes[boxCount].isSelected = 0;
-                        boxCount++;
-                        selectedBox = boxCount - 1;
-                        SelectBox(boxes, boxCount, selectedBox);
-                        PushHistoryState(boxes, boxCount, selectedBox);
-                    } else {
-                        if (path) {
-                            free(path);
+                            boxes[boxCount].x = (int)mousePos.x;
+                            boxes[boxCount].y = (int)mousePos.y;
+                            boxes[boxCount].width = textWidth;
+                            boxes[boxCount].height = textHeight;
+                            boxes[boxCount].type = BOX_TEXT;
+                            boxes[boxCount].content.text = textBuffer;
+                            boxes[boxCount].fontSize = DEFAULT_FONT_SIZE;
+                            boxes[boxCount].textColor = currentDrawColor;
+                            boxes[boxCount].filePath = NULL;
+                            boxes[boxCount].isSelected = 0;
+                            boxCount++;
+                            selectedBox = boxCount - 1;
+                            SelectBox(boxes, boxCount, selectedBox);
+                            PushHistoryState(boxes, boxCount, selectedBox);
+                        } else {
+                            if (path) {
+                                free(path);
+                            }
                         }
+                    } else if (path && boxes[selectedBox].type != BOX_AUDIO) {
+                        free(path);
                     }
-                } else if (path && boxes[selectedBox].type != BOX_AUDIO) {
-                    free(path);
-                }
                 }
             }
         }
@@ -2219,22 +2364,43 @@ int main(void)
                         }
                         DrawText(fileName, titleX, box->y + 16, titleFont, DARKBLUE);
 
-                        int playing = audioDeviceReady && IsSoundReady(box->content.sound) && IsSoundPlaying(box->content.sound);
-                        const char* action = playing ? "Pause (Space / dbl-click)" : "Play (Space / dbl-click)";
+                        int soundReady = audioDeviceReady && IsSoundReady(box->content.sound);
+                        int playing = soundReady && IsSoundPlaying(box->content.sound);
+                        const char* action = NULL;
                         int actionFont = 18;
-                        Color actionColor = playing ? DARKGREEN : DARKBLUE;
+                        Color actionColor = DARKGRAY;
+
+                        if (!audioDeviceReady) {
+                            action = "Audio disabled (device unavailable)";
+                            actionColor = MAROON;
+                        } else if (!soundReady) {
+                            action = "Audio failed to load";
+                            actionColor = MAROON;
+                        } else if (playing) {
+                            action = "Pause (Space / dbl-click)";
+                            actionColor = DARKGREEN;
+                        } else {
+                            action = "Play (Space / dbl-click)";
+                            actionColor = DARKBLUE;
+                        }
+
                         DrawText(action, box->x + 16, box->y + box->height - 34, actionFont, actionColor);
 
                         int iconX = box->x + box->width - 48;
                         int iconY = box->y + (box->height / 2) - 12;
-                        if (playing) {
-                            DrawRectangle(iconX, iconY, 10, 24, actionColor);
-                            DrawRectangle(iconX + 14, iconY, 10, 24, actionColor);
+                        if (soundReady) {
+                            if (playing) {
+                                DrawRectangle(iconX, iconY, 10, 24, actionColor);
+                                DrawRectangle(iconX + 14, iconY, 10, 24, actionColor);
+                            } else {
+                                Vector2 p1 = {(float)iconX, (float)iconY};
+                                Vector2 p2 = {(float)iconX, (float)(iconY + 24)};
+                                Vector2 p3 = {(float)(iconX + 22), (float)(iconY + 12)};
+                                DrawTriangle(p1, p2, p3, actionColor);
+                            }
                         } else {
-                            Vector2 p1 = {(float)iconX, (float)iconY};
-                            Vector2 p2 = {(float)iconX, (float)(iconY + 24)};
-                            Vector2 p3 = {(float)(iconX + 22), (float)(iconY + 12)};
-                            DrawTriangle(p1, p2, p3, actionColor);
+                            DrawLine(iconX, iconY, iconX + 24, iconY + 24, actionColor);
+                            DrawLine(iconX, iconY + 24, iconX + 24, iconY, actionColor);
                         }
                     }
                     break;
@@ -2753,25 +2919,17 @@ void RestoreSnapshotState(Box* boxes, int* boxCount, int* selectedBox, int targe
                 if (src->filePathCopy != NULL) {
                     boxes[i].filePath = strdup(src->filePathCopy);
                 }
+                boxes[i].content.sound = (Sound){0};
                 if (boxes[i].filePath != NULL && audioDeviceReady) {
-                    boxes[i].content.sound = LoadSound(boxes[i].filePath);
-                    if (!IsSoundReady(boxes[i].content.sound)) {
-                        UnloadSound(boxes[i].content.sound);
-                        boxes[i].content.sound = (Sound){0};
+                    Sound restored = LoadSound(boxes[i].filePath);
+                    if (IsSoundReady(restored)) {
+                        boxes[i].content.sound = restored;
+                    } else {
+                        UnloadSound(restored);
                     }
                 }
-                if (!audioDeviceReady || boxes[i].filePath == NULL || !IsSoundReady(boxes[i].content.sound)) {
-                    if (boxes[i].filePath != NULL) {
-                        free(boxes[i].filePath);
-                        boxes[i].filePath = NULL;
-                    }
-                    const char* errorText = "(Audio unavailable)";
-                    boxes[i].type = BOX_TEXT;
-                    boxes[i].content.text = strdup(errorText);
-                    boxes[i].fontSize = DEFAULT_FONT_SIZE;
-                    CalculateTextBoxSize(errorText, boxes[i].fontSize, &boxes[i].width, &boxes[i].height);
-                    boxes[i].textColor = BLACK;
-                }
+                if (boxes[i].width <= 0) boxes[i].width = AUDIO_BOX_WIDTH;
+                if (boxes[i].height <= 0) boxes[i].height = AUDIO_BOX_HEIGHT;
                 break;
             default:
                 break;

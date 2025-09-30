@@ -3,6 +3,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 
 #ifdef _WIN32
 #include "win_clipboard.h"
@@ -29,13 +30,17 @@ typedef enum {
 } Tool;
 
 typedef struct {
-    int x, y, width, height;
+    int x;
+    int y;
+    int width;
+    int height;
     BoxType type;
     union {
         Texture2D texture;
         char* text;
         char* filePath;
     } content;
+    Color textColor;
     int isSelected;
 } Box;
 
@@ -58,6 +63,8 @@ static const float TOOLBAR_HEIGHT = 64.0f;
 static const float TOOLBAR_PADDING = 10.0f;
 static const float STROKE_THICKNESS = 4.0f;
 
+static const Color TEXT_SELECTION_COLOR = {100, 149, 237, 120};
+
 static const Color COLOR_PALETTE[] = {
     BLACK,
     RED,
@@ -75,6 +82,11 @@ int editingBoxIndex = -1;
 char editingText[1024] = {0};
 char editingOriginalText[1024] = {0};
 int cursorPosition = 0;
+int selectionStart = 0;
+int selectionEnd = 0;
+int cursorPreferredColumn = -1;
+int selectAllOnStart = 0;
+int isMouseSelecting = 0;
 float cursorBlinkTime = 0.0f;
 int lastTextEditChanged = 0;
 
@@ -142,76 +154,459 @@ const char* GetClipboardTextSafe(void) {
     #endif
 }
 
-void CalculateTextBoxSize(const char* text, int fontSize, int* width, int* height) {
-    if (!text || strlen(text) == 0) {
-        *width = 100;  /* Minimum width for empty text */
-        *height = fontSize + 20;  /* Font size plus padding */
+static int ClampCursorIndex(const char* text, int index);
+
+static int FindPreviousWordBoundary(const char* text, int index) {
+    if (text == NULL) {
+        return 0;
+    }
+
+    int pos = ClampCursorIndex(text, index);
+    if (pos <= 0) {
+        return 0;
+    }
+
+    pos--;
+
+    while (pos > 0 && isspace((unsigned char)text[pos])) {
+        pos--;
+    }
+
+    while (pos > 0 && !isspace((unsigned char)text[pos - 1])) {
+        pos--;
+    }
+
+    if (pos < 0) {
+        pos = 0;
+    }
+    return pos;
+}
+
+static int FindNextWordBoundary(const char* text, int index) {
+    if (text == NULL) {
+        return 0;
+    }
+
+    int len = (int)strlen(text);
+    int pos = ClampCursorIndex(text, index);
+    if (pos >= len) {
+        return len;
+    }
+
+    while (pos < len && isspace((unsigned char)text[pos])) {
+        pos++;
+    }
+
+    while (pos < len && !isspace((unsigned char)text[pos])) {
+        pos++;
+    }
+
+    if (pos > len) {
+        pos = len;
+    }
+    return pos;
+}
+
+static char* CopySubstring(const char* start, int length) {
+    if (start == NULL || length <= 0) {
+        return NULL;
+    }
+    char* buffer = (char*)malloc((size_t)length + 1);
+    if (buffer == NULL) {
+        return NULL;
+    }
+    memcpy(buffer, start, (size_t)length);
+    buffer[length] = '\0';
+    return buffer;
+}
+
+static int MeasureTextSegmentWidth(const char* start, int length, int fontSize) {
+    if (start == NULL || length <= 0) {
+        return 0;
+    }
+    char* segment = CopySubstring(start, length);
+    if (segment == NULL) {
+        return 0;
+    }
+    int width = MeasureText(segment, fontSize);
+    free(segment);
+    return width;
+}
+
+static int ClampCursorIndex(const char* text, int index) {
+    if (text == NULL) {
+        return 0;
+    }
+    int len = (int)strlen(text);
+    if (index < 0) index = 0;
+    if (index > len) index = len;
+    return index;
+}
+
+static int SelectionHasRange(void) {
+    return selectionStart != selectionEnd;
+}
+
+static int SelectionMin(void) {
+    return (selectionStart < selectionEnd) ? selectionStart : selectionEnd;
+}
+
+static int SelectionMax(void) {
+    return (selectionStart > selectionEnd) ? selectionStart : selectionEnd;
+}
+
+static void MoveCursorTo(int position, int extendSelection) {
+    int clamped = ClampCursorIndex(editingText, position);
+    if (extendSelection) {
+        selectionEnd = clamped;
+    } else {
+        selectionStart = clamped;
+        selectionEnd = clamped;
+    }
+    cursorPosition = selectionEnd;
+    if (!extendSelection) {
+        cursorPreferredColumn = -1;
+    }
+    cursorBlinkTime = 0.0f;
+}
+
+static int DeleteSelectionRange(void) {
+    if (!SelectionHasRange()) {
+        return 0;
+    }
+    int start = SelectionMin();
+    int end = SelectionMax();
+    int len = (int)strlen(editingText);
+    if (start < 0) start = 0;
+    if (end > len) end = len;
+    memmove(editingText + start, editingText + end, (size_t)(len - end + 1));
+    selectionStart = selectionEnd = start;
+    cursorPosition = start;
+    cursorPreferredColumn = -1;
+    cursorBlinkTime = 0.0f;
+    return 1;
+}
+
+static int GetLineStartIndex(const char* text, int index) {
+    if (text == NULL) return 0;
+    int clamped = ClampCursorIndex(text, index);
+    while (clamped > 0 && text[clamped - 1] != '\n') {
+        clamped--;
+    }
+    return clamped;
+}
+
+static int GetLineEndIndex(const char* text, int index) {
+    if (text == NULL) return 0;
+    int len = (int)strlen(text);
+    int clamped = ClampCursorIndex(text, index);
+    while (clamped < len && text[clamped] != '\n') {
+        clamped++;
+    }
+    return clamped;
+}
+
+static void MoveCursorVertical(int direction, int extendSelection) {
+    if (direction == 0) {
         return;
     }
 
-    /* Handle multi-line text by splitting on newlines and calculating max width and total height */
-    char* textCopy = strdup(text);
-    char* line = strtok(textCopy, "\n");
+    int len = (int)strlen(editingText);
+    if (len == 0) {
+        MoveCursorTo(0, extendSelection);
+        return;
+    }
+
+    int lineStart = GetLineStartIndex(editingText, cursorPosition);
+    int currentColumn = cursorPosition - lineStart;
+    int preferredColumn = cursorPreferredColumn;
+    if (preferredColumn < 0) {
+        preferredColumn = currentColumn;
+    }
+
+    if (direction < 0) {
+        if (lineStart == 0) {
+            MoveCursorTo(0, extendSelection);
+            cursorPreferredColumn = preferredColumn;
+            return;
+        }
+        int prevLineEnd = lineStart - 1;
+        int prevLineStart = GetLineStartIndex(editingText, prevLineEnd);
+        int prevLineLength = prevLineEnd - prevLineStart;
+        int targetColumn = preferredColumn;
+        if (targetColumn > prevLineLength) targetColumn = prevLineLength;
+        MoveCursorTo(prevLineStart + targetColumn, extendSelection);
+    } else {
+        int lineEnd = GetLineEndIndex(editingText, cursorPosition);
+        if (lineEnd >= len) {
+            MoveCursorTo(len, extendSelection);
+            cursorPreferredColumn = preferredColumn;
+            return;
+        }
+        int nextLineStart = lineEnd + 1;
+        if (nextLineStart > len) {
+            MoveCursorTo(len, extendSelection);
+            cursorPreferredColumn = preferredColumn;
+            return;
+        }
+        int nextLineEnd = GetLineEndIndex(editingText, nextLineStart);
+        int nextLineLength = nextLineEnd - nextLineStart;
+        int targetColumn = preferredColumn;
+        if (targetColumn > nextLineLength) targetColumn = nextLineLength;
+        MoveCursorTo(nextLineStart + targetColumn, extendSelection);
+    }
+
+    cursorPreferredColumn = preferredColumn;
+}
+
+static void GetCursorCoordinates(const char* text, int fontSize, int index, int* outX, int* outY) {
+    if (outX) *outX = 0;
+    if (outY) *outY = 0;
+    if (text == NULL) {
+        return;
+    }
+
+    int len = (int)strlen(text);
+    int clamped = ClampCursorIndex(text, index);
+    int currentIndex = 0;
+    int lineNumber = 0;
+
+    while (currentIndex <= len) {
+        const char* linePtr = text + currentIndex;
+        const char* newline = strchr(linePtr, '\n');
+        int lineLength = newline ? (int)(newline - linePtr) : (int)strlen(linePtr);
+        int lineEnd = currentIndex + lineLength;
+
+        if (clamped <= lineEnd) {
+            int offset = clamped - currentIndex;
+            if (outX) {
+                *outX = MeasureTextSegmentWidth(linePtr, offset, fontSize);
+            }
+            if (outY) {
+                *outY = lineNumber * fontSize;
+            }
+            return;
+        }
+
+        currentIndex = lineEnd;
+        if (newline) {
+            if (clamped == currentIndex) {
+                if (outX) {
+                    *outX = MeasureTextSegmentWidth(linePtr, lineLength, fontSize);
+                }
+                if (outY) {
+                    *outY = lineNumber * fontSize;
+                }
+                return;
+            }
+            currentIndex++;
+            lineNumber++;
+        } else {
+            break;
+        }
+    }
+
+    if (outX) {
+        const char* linePtr = text + currentIndex;
+        *outX = MeasureTextSegmentWidth(linePtr, (int)strlen(linePtr), fontSize);
+    }
+    if (outY) {
+        *outY = lineNumber * fontSize;
+    }
+}
+
+static int GetTextIndexFromPoint(const char* text, int fontSize, Vector2 local) {
+    if (text == NULL) {
+        return 0;
+    }
+
+    int len = (int)strlen(text);
+    int x = (int)local.x - 10;
+    int y = (int)local.y - 10;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    int lineIndex = y / fontSize;
+
+    int currentIndex = 0;
+    int currentLine = 0;
+
+    while (currentIndex <= len) {
+        const char* linePtr = text + currentIndex;
+        const char* newline = strchr(linePtr, '\n');
+        int lineLength = newline ? (int)(newline - linePtr) : (int)strlen(linePtr);
+        int lineEnd = currentIndex + lineLength;
+
+        if (currentLine == lineIndex || !newline) {
+            int offset = 0;
+            for (int i = 0; i <= lineLength; i++) {
+                int width = MeasureTextSegmentWidth(linePtr, i, fontSize);
+                if (x < width) {
+                    offset = i;
+                    break;
+                }
+                offset = i;
+            }
+            int target = currentIndex + offset;
+            if (target > len) target = len;
+            return target;
+        }
+
+        if (!newline) {
+            break;
+        }
+
+        currentIndex = lineEnd + 1;
+        currentLine++;
+    }
+
+    return len;
+}
+
+void CalculateTextBoxSize(const char* text, int fontSize, int* width, int* height) {
+    if (width == NULL || height == NULL) {
+        return;
+    }
+
     int maxWidth = 0;
     int lineCount = 0;
 
-    while (line != NULL) {
-        int lineWidth = MeasureText(line, fontSize);
+    if (text && text[0] != '\0') {
+        const char* ptr = text;
+        const char* lineStart = text;
+
+        while (*ptr != '\0') {
+            if (*ptr == '\n') {
+                int lineWidth = MeasureTextSegmentWidth(lineStart, (int)(ptr - lineStart), fontSize);
+                if (lineWidth > maxWidth) {
+                    maxWidth = lineWidth;
+                }
+                lineCount++;
+                lineStart = ptr + 1;
+            }
+            ptr++;
+        }
+
+        int lineWidth = MeasureTextSegmentWidth(lineStart, (int)(ptr - lineStart), fontSize);
         if (lineWidth > maxWidth) {
             maxWidth = lineWidth;
         }
         lineCount++;
-        line = strtok(NULL, "\n");
-    }
-
-    /* If no newlines found, treat as single line */
-    if (lineCount == 0) {
-        maxWidth = MeasureText(text, fontSize);
+    } else {
         lineCount = 1;
     }
 
-    /* Add padding around text */
-    *width = maxWidth + 20;  /* 10px padding on each side */
-    *height = (lineCount * fontSize) + 20;  /* Line height * number of lines plus padding */
+    if (lineCount <= 0) {
+        lineCount = 1;
+    }
 
-    /* Ensure minimum dimensions */
-    if (*width < 100) *width = 100;
-    if (*height < 30) *height = 30;
+    int paddedWidth = maxWidth + 20;   /* 10px padding on each side */
+    int paddedHeight = (lineCount * fontSize) + 20;
 
-    free(textCopy);
+    if (paddedWidth < 100) paddedWidth = 100;
+    if (paddedHeight < 30) paddedHeight = 30;
+
+    *width = paddedWidth;
+    *height = paddedHeight;
 }
 
-void DrawMultilineText(const char* text, int x, int y, int fontSize, Color color) {
-    if (!text || strlen(text) == 0) {
+static void DrawMultilineTextWithSelection(const char* text, int x, int y, int fontSize, Color color, int selStart, int selEnd, Color highlight) {
+    if (text == NULL) {
         return;
     }
 
-    char* textCopy = strdup(text);
-    char* line = strtok(textCopy, "\n");
+    int totalLength = (int)strlen(text);
+    int hasSelection = (selStart != selEnd);
+    if (selStart > selEnd) {
+        int tmp = selStart;
+        selStart = selEnd;
+        selEnd = tmp;
+    }
+
+    int currentIndex = 0;
     int currentY = y;
 
-    while (line != NULL) {
-        DrawText(line, x, currentY, fontSize, color);
-        currentY += fontSize;  /* Move to next line */
-        line = strtok(NULL, "\n");
-    }
+    while (1) {
+        const char* linePtr = text + currentIndex;
+        const char* newline = strchr(linePtr, '\n');
+        int lineLength = newline ? (int)(newline - linePtr) : (int)strlen(linePtr);
+        int lineStartIndex = currentIndex;
+        int lineEndIndex = lineStartIndex + lineLength;
 
-    /* If no newlines found, draw as single line */
-    if (currentY == y) {
-        DrawText(text, x, y, fontSize, color);
-    }
+        if (hasSelection) {
+            int highlightStart = selStart;
+            if (highlightStart < lineStartIndex) highlightStart = lineStartIndex;
+            if (highlightStart > lineEndIndex) highlightStart = lineEndIndex;
 
-    free(textCopy);
+            int highlightEnd = selEnd;
+            if (highlightEnd < lineStartIndex) highlightEnd = lineStartIndex;
+            if (highlightEnd > lineEndIndex) highlightEnd = lineEndIndex;
+
+            int highlightLength = highlightEnd - highlightStart;
+            if (highlightLength > 0) {
+                int preLength = highlightStart - lineStartIndex;
+                int preWidth = MeasureTextSegmentWidth(linePtr, preLength, fontSize);
+                int highlightWidth = MeasureTextSegmentWidth(linePtr + preLength, highlightLength, fontSize);
+                if (highlightWidth <= 0) highlightWidth = fontSize / 2;
+                DrawRectangle(x + preWidth, currentY, (float)highlightWidth, (float)fontSize, highlight);
+            } else if (lineLength == 0 && selStart <= lineStartIndex && selEnd > lineStartIndex) {
+                DrawRectangle(x, currentY, (float)(fontSize / 2), (float)fontSize, highlight);
+            }
+
+            if (selStart <= lineEndIndex && selEnd > lineEndIndex && newline) {
+                int endWidth = MeasureTextSegmentWidth(linePtr, lineLength, fontSize);
+                DrawRectangle(x + endWidth, currentY, (float)(fontSize / 2), (float)fontSize, highlight);
+            }
+        }
+
+        if (lineLength > 0) {
+            char* line = CopySubstring(linePtr, lineLength);
+            if (line != NULL) {
+                DrawText(line, x, currentY, fontSize, color);
+                free(line);
+            }
+        }
+
+        if (!newline) {
+            break;
+        }
+
+        currentIndex = lineEndIndex + 1;
+        currentY += fontSize;
+
+        if (currentIndex > totalLength) {
+            break;
+        }
+
+        if (currentIndex == totalLength) {
+            if (hasSelection && selStart <= currentIndex && selEnd > currentIndex) {
+                DrawRectangle(x, currentY, (float)(fontSize / 2), (float)fontSize, highlight);
+            }
+            break;
+        }
+    }
 }
 
 void StartTextEdit(int boxIndex, Box* boxes) {
     if (boxIndex >= 0 && boxes[boxIndex].type == BOX_TEXT) {
+        if (boxes[boxIndex].textColor.a == 0) {
+            boxes[boxIndex].textColor = BLACK;
+        }
         editingBoxIndex = boxIndex;
         strncpy(editingText, boxes[boxIndex].content.text, sizeof(editingText) - 1);
         editingText[sizeof(editingText) - 1] = '\0';
         strncpy(editingOriginalText, editingText, sizeof(editingOriginalText) - 1);
         editingOriginalText[sizeof(editingOriginalText) - 1] = '\0';
         cursorPosition = strlen(editingText);
+        if (selectAllOnStart) {
+            selectionStart = 0;
+            selectionEnd = cursorPosition;
+            selectAllOnStart = 0;
+        } else {
+            selectionStart = cursorPosition;
+            selectionEnd = cursorPosition;
+        }
+        cursorPreferredColumn = -1;
+        isMouseSelecting = 0;
         cursorBlinkTime = 0.0f;
         UpdateEditingBoxSize(boxes);
     }
@@ -237,6 +632,10 @@ void StopTextEdit(Box* boxes) {
         memset(editingText, 0, sizeof(editingText));
         memset(editingOriginalText, 0, sizeof(editingOriginalText));
         cursorPosition = 0;
+        selectionStart = 0;
+        selectionEnd = 0;
+        cursorPreferredColumn = -1;
+        isMouseSelecting = 0;
     }
 }
 
@@ -261,69 +660,184 @@ void HandleTextInput(Box* boxes) {
     if (editingBoxIndex < 0) return;
 
     int textChanged = 0;
+    int ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+    int shiftDown = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
 
-    /* Handle character input */
+    if (ctrlDown && IsKeyPressed(KEY_C)) {
+        if (SelectionHasRange()) {
+            int start = SelectionMin();
+            int length = SelectionMax() - start;
+            char* sliced = CopySubstring(editingText + start, length);
+            if (sliced != NULL) {
+                SetClipboardText(sliced);
+                free(sliced);
+            }
+        }
+    }
+
+    if (ctrlDown && IsKeyPressed(KEY_X)) {
+        if (SelectionHasRange()) {
+            int start = SelectionMin();
+            int length = SelectionMax() - start;
+            char* sliced = CopySubstring(editingText + start, length);
+            if (sliced != NULL) {
+                SetClipboardText(sliced);
+                free(sliced);
+            }
+            textChanged |= DeleteSelectionRange();
+        }
+    }
+
+    if (ctrlDown && IsKeyPressed(KEY_V)) {
+        const char* clip = GetClipboardTextSafe();
+        if (clip && clip[0] != '\0') {
+            if (SelectionHasRange()) {
+                textChanged |= DeleteSelectionRange();
+            }
+
+            int currentLen = (int)strlen(editingText);
+            int available = (int)sizeof(editingText) - 1 - currentLen;
+            if (available > 0) {
+                int clipLen = (int)strlen(clip);
+                if (clipLen > available) {
+                    clipLen = available;
+                }
+
+                memmove(editingText + cursorPosition + clipLen,
+                        editingText + cursorPosition,
+                        (size_t)(currentLen - cursorPosition + 1));
+                memcpy(editingText + cursorPosition, clip, (size_t)clipLen);
+                MoveCursorTo(cursorPosition + clipLen, 0);
+                textChanged = 1;
+            }
+        }
+    }
+
+    /* Handle printable character input */
     int key = GetCharPressed();
     while (key > 0) {
-        if (key >= 32 && key <= 126 && cursorPosition < sizeof(editingText) - 1) {
-            /* Insert character at cursor position */
-            int textLen = strlen(editingText);
-            for (int i = textLen; i >= cursorPosition; i--) {
-                editingText[i + 1] = editingText[i];
+        if (key >= 32 && key <= 126) {
+            int currentLength = (int)strlen(editingText);
+            if (currentLength < (int)sizeof(editingText) - 1) {
+                if (DeleteSelectionRange()) {
+                    textChanged = 1;
+                }
+                /* Insert character */
+                for (int i = currentLength; i >= cursorPosition; i--) {
+                    editingText[i + 1] = editingText[i];
+                }
+                editingText[cursorPosition] = (char)key;
+                MoveCursorTo(cursorPosition + 1, 0);
+                textChanged = 1;
             }
-            editingText[cursorPosition] = (char)key;
-            cursorPosition++;
-            textChanged = 1;
         }
         key = GetCharPressed();
     }
 
-    /* Handle special keys */
-    if (IsKeyPressed(KEY_BACKSPACE) && cursorPosition > 0) {
-        /* Delete character before cursor */
-        int textLen = strlen(editingText);
-        for (int i = cursorPosition - 1; i < textLen; i++) {
-            editingText[i] = editingText[i + 1];
-        }
-        cursorPosition--;
-        textChanged = 1;
-    }
-
-    if (IsKeyPressed(KEY_DELETE)) {
-        /* Delete character at cursor */
-        int textLen = strlen(editingText);
-        if (cursorPosition < textLen) {
-            for (int i = cursorPosition; i < textLen; i++) {
-                editingText[i] = editingText[i + 1];
-            }
-            textChanged = 1;
-        }
-    }
-
-    if (IsKeyPressed(KEY_LEFT) && cursorPosition > 0) {
-        cursorPosition--;
-    }
-
-    if (IsKeyPressed(KEY_RIGHT) && cursorPosition < strlen(editingText)) {
-        cursorPosition++;
+    if (ctrlDown && IsKeyPressed(KEY_A)) {
+        selectionStart = 0;
+        selectionEnd = (int)strlen(editingText);
+        cursorPosition = selectionEnd;
+        cursorBlinkTime = 0.0f;
+        cursorPreferredColumn = -1;
     }
 
     if (IsKeyPressed(KEY_ENTER)) {
-        /* Insert newline at cursor position */
-        if (cursorPosition < sizeof(editingText) - 1) {
-            int textLen = strlen(editingText);
-            for (int i = textLen; i >= cursorPosition; i--) {
+        int currentLength = (int)strlen(editingText);
+        if (currentLength < (int)sizeof(editingText) - 1) {
+            if (DeleteSelectionRange()) {
+                textChanged = 1;
+            }
+            for (int i = currentLength; i >= cursorPosition; i--) {
                 editingText[i + 1] = editingText[i];
             }
             editingText[cursorPosition] = '\n';
-            cursorPosition++;
+            MoveCursorTo(cursorPosition + 1, 0);
             textChanged = 1;
         }
     }
 
-    /* Update box size if text changed */
+    if (IsKeyPressed(KEY_BACKSPACE)) {
+        if (SelectionHasRange()) {
+            textChanged |= DeleteSelectionRange();
+        } else if (cursorPosition > 0) {
+            int len = (int)strlen(editingText);
+            for (int i = cursorPosition - 1; i < len; i++) {
+                editingText[i] = editingText[i + 1];
+            }
+            MoveCursorTo(cursorPosition - 1, 0);
+            textChanged = 1;
+        }
+    }
+
+    if (IsKeyPressed(KEY_DELETE)) {
+        if (SelectionHasRange()) {
+            textChanged |= DeleteSelectionRange();
+        } else {
+            int len = (int)strlen(editingText);
+            if (cursorPosition < len) {
+                for (int i = cursorPosition; i < len; i++) {
+                    editingText[i] = editingText[i + 1];
+                }
+                textChanged = 1;
+                cursorBlinkTime = 0.0f;
+                cursorPreferredColumn = -1;
+            }
+        }
+    }
+
+    if (IsKeyPressed(KEY_LEFT)) {
+        if (!shiftDown && SelectionHasRange()) {
+            MoveCursorTo(SelectionMin(), 0);
+        } else if (ctrlDown) {
+            int newPos = FindPreviousWordBoundary(editingText, cursorPosition);
+            MoveCursorTo(newPos, shiftDown);
+        } else {
+            MoveCursorTo(cursorPosition - 1, shiftDown);
+        }
+    }
+
+    if (IsKeyPressed(KEY_RIGHT)) {
+        if (!shiftDown && SelectionHasRange()) {
+            MoveCursorTo(SelectionMax(), 0);
+        } else if (ctrlDown) {
+            int newPos = FindNextWordBoundary(editingText, cursorPosition);
+            MoveCursorTo(newPos, shiftDown);
+        } else {
+            MoveCursorTo(cursorPosition + 1, shiftDown);
+        }
+    }
+
+    if (IsKeyPressed(KEY_HOME)) {
+        if (ctrlDown) {
+            MoveCursorTo(0, shiftDown);
+        } else {
+            int start = GetLineStartIndex(editingText, cursorPosition);
+            MoveCursorTo(start, shiftDown);
+        }
+    }
+
+    if (IsKeyPressed(KEY_END)) {
+        if (ctrlDown) {
+            int len = (int)strlen(editingText);
+            MoveCursorTo(len, shiftDown);
+        } else {
+            int end = GetLineEndIndex(editingText, cursorPosition);
+            MoveCursorTo(end, shiftDown);
+        }
+    }
+
+    if (IsKeyPressed(KEY_UP)) {
+        MoveCursorVertical(-1, shiftDown);
+    }
+
+    if (IsKeyPressed(KEY_DOWN)) {
+        MoveCursorVertical(1, shiftDown);
+    }
+
     if (textChanged) {
         UpdateEditingBoxSize(boxes);
+        lastTextEditChanged = 1;
     }
 }
 
@@ -333,35 +847,18 @@ void DrawTextCursor(int x, int y, int fontSize) {
     /* Update cursor blink timer */
     cursorBlinkTime += GetFrameTime();
 
-    /* Draw blinking cursor */
-    if (fmod(cursorBlinkTime, 1.0f) < 0.5f) {
-        /* Calculate cursor position within text */
-        char tempText[1024];
-        strncpy(tempText, editingText, cursorPosition);
-        tempText[cursorPosition] = '\0';
+    if (SelectionHasRange()) {
+        /* Still draw the caret at the selection end for clarity */
+        cursorBlinkTime = fmodf(cursorBlinkTime, 1.0f);
+    }
 
-        /* Handle multi-line cursor positioning */
-        char* lastNewline = strrchr(tempText, '\n');
-        int cursorX = x + 10; /* Box padding */
-        int cursorY = y + 10; /* Box padding */
-
-        if (lastNewline) {
-            /* Cursor is not on first line */
-            char* lineStart = lastNewline + 1;
-            cursorX += MeasureText(lineStart, fontSize);
-
-            /* Count newlines to determine Y position */
-            int lineCount = 0;
-            for (int i = 0; i < cursorPosition; i++) {
-                if (editingText[i] == '\n') lineCount++;
-            }
-            cursorY += lineCount * fontSize;
-        } else {
-            /* Cursor is on first line */
-            cursorX += MeasureText(tempText, fontSize);
-        }
-
-        DrawLine(cursorX, cursorY, cursorX, cursorY + fontSize, RED);
+    if (fmodf(cursorBlinkTime, 1.0f) < 0.5f || SelectionHasRange()) {
+        int relativeX = 0;
+        int relativeY = 0;
+        GetCursorCoordinates(editingText, fontSize, cursorPosition, &relativeX, &relativeY);
+        int drawX = x + 10 + relativeX;
+        int drawY = y + 10 + relativeY;
+        DrawRectangle(drawX, drawY, 2, fontSize, RED);
     }
 }
 
@@ -610,6 +1107,8 @@ int main(void)
     while (!WindowShouldClose())
     {
         mousePos = GetMousePosition();
+        int ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+        int shiftDown = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
 
         int screenWidthCurrent = GetScreenWidth();
         int screenHeightCurrent = GetScreenHeight();
@@ -705,7 +1204,23 @@ int main(void)
                     if (!actionHandled) {
                         for (int i = 0; i < COLOR_PALETTE_COUNT; i++) {
                             if (CheckCollisionPointRec(mousePos, colorButtons[i])) {
-                                currentDrawColor = COLOR_PALETTE[i];
+                                Color chosenColor = COLOR_PALETTE[i];
+                                int targetIndex = (editingBoxIndex >= 0) ? editingBoxIndex : selectedBox;
+                                int textColorChanged = 0;
+                                currentDrawColor = chosenColor;
+
+                                if (targetIndex != -1 && boxes[targetIndex].type == BOX_TEXT) {
+                                    Color previous = boxes[targetIndex].textColor;
+                                    boxes[targetIndex].textColor = chosenColor;
+                                    if (!ColorsEqual(previous, chosenColor)) {
+                                        textColorChanged = 1;
+                                    }
+                                }
+
+                                if (textColorChanged) {
+                                    int historySelection = (targetIndex != -1) ? targetIndex : selectedBox;
+                                    PushHistoryState(boxes, boxCount, historySelection);
+                                }
                                 actionHandled = 1;
                                 break;
                             }
@@ -774,6 +1289,7 @@ int main(void)
 
                 if (!handledToolbarClick) {
                     if (currentTool == TOOL_SELECT) {
+                        int handledTextCaret = 0;
                         if (editingBoxIndex >= 0) {
                             Rectangle editingRect = {
                                 boxes[editingBoxIndex].x,
@@ -784,25 +1300,65 @@ int main(void)
 
                             if (!CheckCollisionPointRec(mousePos, editingRect)) {
                                 StopTextEditAndRecord(boxes, boxCount, selectedBox);
+                            } else {
+                                ResizeMode editHover = GetResizeModeForPoint(&boxes[editingBoxIndex], mousePos);
+                                int onHandle = (editHover != RESIZE_NONE);
+                                int onDragBorder = IsPointInTextDragZone(&boxes[editingBoxIndex], mousePos);
+                                if (!onHandle && !onDragBorder) {
+                                    Vector2 localPoint = {
+                                        mousePos.x - (float)boxes[editingBoxIndex].x,
+                                        mousePos.y - (float)boxes[editingBoxIndex].y
+                                    };
+                                    int caretIndex = GetTextIndexFromPoint(editingText, 20, localPoint);
+                                    MoveCursorTo(caretIndex, shiftDown);
+                                    isMouseSelecting = 1;
+                                    cursorPreferredColumn = -1;
+                                    dragBoxValid = 0;
+                                    isDragging = 0;
+                                    handledTextCaret = 1;
+                                }
                             }
                         }
 
-                        double currentTime = GetTime();
-                        float dx = mousePos.x - lastClickPos.x;
-                        float dy = mousePos.y - lastClickPos.y;
-                        float clickDistance = sqrtf(dx*dx + dy*dy);
-                        int isDoubleClick = (currentTime - lastClickTime < doubleClickInterval) &&
-                                            (clickDistance < doubleClickDistance);
+                        if (handledTextCaret) {
+                            lastClickTime = 0.0;
+                        } else {
+                            double currentTime = GetTime();
+                            float dx = mousePos.x - lastClickPos.x;
+                            float dy = mousePos.y - lastClickPos.y;
+                            float clickDistance = sqrtf(dx*dx + dy*dy);
+                            int isDoubleClick = (currentTime - lastClickTime < doubleClickInterval) &&
+                                                (clickDistance < doubleClickDistance);
 
-                        if (isDoubleClick) {
-                            int clickedBox = FindTopmostBoxAtPoint(mousePos, boxes, boxCount);
+                            if (isDoubleClick) {
+                                int clickedBox = FindTopmostBoxAtPoint(mousePos, boxes, boxCount);
 
-                            if (clickedBox != -1) {
-                                selectedBox = clickedBox;
-                                SelectBox(boxes, boxCount, selectedBox);
+                                if (clickedBox != -1) {
+                                    selectedBox = clickedBox;
+                                    SelectBox(boxes, boxCount, selectedBox);
 
-                                if (boxes[clickedBox].type == BOX_TEXT) {
-                                    StartTextEdit(clickedBox, boxes);
+                                    if (boxes[clickedBox].type == BOX_TEXT) {
+                                        StartTextEdit(clickedBox, boxes);
+                                    } else if (boxCount < MAX_BOXES) {
+                                        int textWidth, textHeight;
+                                        const char* newText = "New text";
+                                        CalculateTextBoxSize(newText, 20, &textWidth, &textHeight);
+
+                                        boxes[boxCount].x = (int)mousePos.x;
+                                        boxes[boxCount].y = (int)mousePos.y;
+                                        boxes[boxCount].width = textWidth;
+                                        boxes[boxCount].height = textHeight;
+                                        boxes[boxCount].type = BOX_TEXT;
+                                        boxes[boxCount].content.text = strdup(newText);
+                                        boxes[boxCount].textColor = currentDrawColor;
+                                        boxes[boxCount].isSelected = 0;
+                                        boxCount++;
+                                        selectedBox = boxCount - 1;
+                                        SelectBox(boxes, boxCount, selectedBox);
+                                        selectAllOnStart = 1;
+                                        StartTextEdit(selectedBox, boxes);
+                                        PushHistoryState(boxes, boxCount, selectedBox);
+                                    }
                                 } else if (boxCount < MAX_BOXES) {
                                     int textWidth, textHeight;
                                     const char* newText = "New text";
@@ -814,38 +1370,23 @@ int main(void)
                                     boxes[boxCount].height = textHeight;
                                     boxes[boxCount].type = BOX_TEXT;
                                     boxes[boxCount].content.text = strdup(newText);
+                                    boxes[boxCount].textColor = currentDrawColor;
                                     boxes[boxCount].isSelected = 0;
                                     boxCount++;
                                     selectedBox = boxCount - 1;
                                     SelectBox(boxes, boxCount, selectedBox);
+                                    selectAllOnStart = 1;
                                     StartTextEdit(selectedBox, boxes);
                                     PushHistoryState(boxes, boxCount, selectedBox);
                                 }
-                            } else if (boxCount < MAX_BOXES) {
-                                int textWidth, textHeight;
-                                const char* newText = "New text";
-                                CalculateTextBoxSize(newText, 20, &textWidth, &textHeight);
 
-                                boxes[boxCount].x = (int)mousePos.x;
-                                boxes[boxCount].y = (int)mousePos.y;
-                                boxes[boxCount].width = textWidth;
-                                boxes[boxCount].height = textHeight;
-                                boxes[boxCount].type = BOX_TEXT;
-                                boxes[boxCount].content.text = strdup(newText);
-                                boxes[boxCount].isSelected = 0;
-                                boxCount++;
-                                selectedBox = boxCount - 1;
-                                SelectBox(boxes, boxCount, selectedBox);
-                                StartTextEdit(selectedBox, boxes);
-                                PushHistoryState(boxes, boxCount, selectedBox);
+                                lastClickTime = 0.0;
+                                continue;
                             }
 
-                            lastClickTime = 0.0;
-                            continue;
+                            lastClickTime = currentTime;
+                            lastClickPos = mousePos;
                         }
-
-                        lastClickTime = currentTime;
-                        lastClickPos = mousePos;
 
                         int clickedBox = FindTopmostBoxAtPoint(mousePos, boxes, boxCount);
                         if (clickedBox != -1) {
@@ -928,6 +1469,23 @@ int main(void)
                 }
             }
 
+            if (isMouseSelecting && IsMouseButtonDown(MOUSE_LEFT_BUTTON) && editingBoxIndex >= 0) {
+                Rectangle editingRect = {
+                    boxes[editingBoxIndex].x,
+                    boxes[editingBoxIndex].y,
+                    (float)boxes[editingBoxIndex].width,
+                    (float)boxes[editingBoxIndex].height
+                };
+                if (CheckCollisionPointRec(mousePos, editingRect)) {
+                    Vector2 localPoint = {
+                        mousePos.x - (float)boxes[editingBoxIndex].x,
+                        mousePos.y - (float)boxes[editingBoxIndex].y
+                    };
+                    int caretIndex = GetTextIndexFromPoint(editingText, 20, localPoint);
+                    MoveCursorTo(caretIndex, 1);
+                }
+            }
+
             if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && isDrawing && currentTool == TOOL_PEN && penPointCount > 0) {
                 Vector2 lastPoint = penPoints[penPointCount - 1];
                 float dx = mousePos.x - lastPoint.x;
@@ -947,6 +1505,11 @@ int main(void)
                 if (isDragging) {
                     isDragging = 0;
                     resizeMode = RESIZE_NONE;
+                }
+
+                if (isMouseSelecting) {
+                    isMouseSelecting = 0;
+                    cursorPreferredColumn = -1;
                 }
 
                 if (wasDragging && dragBoxValid && dragChanged) {
@@ -1159,9 +1722,6 @@ int main(void)
 
         prevMousePos = mousePos;
 
-    int ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
-    int shiftDown = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
-
         if (!showClearConfirm) {
             if (IsKeyPressed(KEY_S)) {
                 currentTool = TOOL_SELECT;
@@ -1226,7 +1786,7 @@ int main(void)
         }
 
         /* Paste */
-        if (!showClearConfirm && ctrlDown && IsKeyPressed(KEY_V)) {
+    if (!showClearConfirm && ctrlDown && IsKeyPressed(KEY_V) && editingBoxIndex < 0) {
             #ifdef _WIN32
             /* Check for image data first on Windows */
             if (WinClip_HasImage() && boxCount < MAX_BOXES) {
@@ -1270,6 +1830,7 @@ int main(void)
                     boxes[boxCount].height = textHeight;
                     boxes[boxCount].type = BOX_TEXT;
                     boxes[boxCount].content.text = strdup(errorText);
+                    boxes[boxCount].textColor = currentDrawColor;
                     boxes[boxCount].isSelected = 0;
                     boxCount++;
                     selectedBox = boxCount - 1;
@@ -1320,6 +1881,7 @@ int main(void)
                     boxes[boxCount].height = textHeight;
                     boxes[boxCount].type = BOX_TEXT;
                     boxes[boxCount].content.text = path;
+                    boxes[boxCount].textColor = currentDrawColor;
                     boxes[boxCount].isSelected = 0;
                     boxCount++;
                     selectedBox = boxCount - 1;
@@ -1350,11 +1912,17 @@ int main(void)
                     }
                     break;
                 case BOX_TEXT:
-                    if (editingBoxIndex == i) {
-                        DrawMultilineText(editingText, box->x + 10, box->y + 10, 20, BLACK);
-                        DrawTextCursor(box->x, box->y, 20);
-                    } else {
-                        DrawMultilineText(box->content.text, box->x + 10, box->y + 10, 20, BLACK);
+                    {
+                        Color textColor = box->textColor;
+                        if (textColor.a == 0) {
+                            textColor = BLACK;
+                        }
+                        if (editingBoxIndex == i) {
+                            DrawMultilineTextWithSelection(editingText, box->x + 10, box->y + 10, 20, textColor, selectionStart, selectionEnd, TEXT_SELECTION_COLOR);
+                            DrawTextCursor(box->x, box->y, 20);
+                        } else {
+                            DrawMultilineTextWithSelection(box->content.text, box->x + 10, box->y + 10, 20, textColor, 0, 0, TEXT_SELECTION_COLOR);
+                        }
                     }
                     break;
                 case BOX_DRAWING:
@@ -1602,6 +2170,11 @@ void ResetEditingState(void) {
     memset(editingText, 0, sizeof(editingText));
     cursorPosition = 0;
     cursorBlinkTime = 0.0f;
+    selectionStart = 0;
+    selectionEnd = 0;
+    selectAllOnStart = 0;
+    isMouseSelecting = 0;
+    cursorPreferredColumn = -1;
 }
 
 int ColorsEqual(Color a, Color b) {

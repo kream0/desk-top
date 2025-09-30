@@ -34,28 +34,34 @@
   - [x] Double-click on empty canvas → Create text box in edit mode
   - [x] Double-click on existing text box → Enter text edit mode
   - [x] Double-click on image → Create text box on top of image
-- [ ] **Text editing system**:
-  - Cursor positioning within text
-  - Text selection and deletion
-  - Real-time text input and display
-  - Enter/Escape to confirm/cancel editing
-- [ ] **Smart box wrapping**: Ensure all content boxes properly fit their content
+- [x] **Text editing system**:
+  - [x] Cursor positioning within text
+  - [x] Text selection and deletion
+  - [x] Real-time text input and display
+  - [x] Enter/Escape to confirm/cancel editing
+  - [x] Support Home/End navigation, range selection, and Delete key behaviour matching standard editors
+- [x] **Smart box wrapping**: Ensure all content boxes properly fit their content
   - Text boxes auto-size to text dimensions
   - Image boxes match image dimensions
   - Drawing boxes maintain drawn content bounds
+- [x] Text nodes should default to black and honor the active color picker selection
+- [x] Automatically select (highlight) newly created text boxes
+- [x] Preserve trailing spaces and blank lines in text boxes after exiting edit mode
+- [x] Support text clipboard workflows and navigation shortcuts (Ctrl+C/X/V, Ctrl+A, Ctrl+Arrow, Ctrl+Home/End)
 
 ## Medium Priority - Additional Features
 - [ ] Add video content support (load and display video files)
 - [ ] Add audio content support (load and play audio files)
-- [ ] Implement pen drawing tool (freeform drawing)
-- [ ] Implement segment/line drawing tool
+- [x] Implement pen drawing tool (freeform drawing)
+- [x] Implement segment/line drawing tool
 
 ## Low Priority - Polish and Performance
 - [x] Add undo/redo functionality
 - [ ] Improve UI (tool selection UI, status bar)
-- [ ] Add keyboard shortcuts for all tools
+- [x] Add keyboard shortcuts for all tools
 - [ ] Support multiple selection of boxes
-- [ ] Add box layering/z-index management
+- [x] Add box layering/z-index management
+- [ ] Make selection outline lime green for better contrast
 
 ## Technical Debt
 - [ ] Improve error handling in clipboard functions

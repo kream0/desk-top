@@ -11,6 +11,7 @@
 - [x] Deliver canvas UX polish (live text sizing, focus handling, resize handles, contextual cursors)
 
 ## High Priority - User Experience Improvements
+- [ ] **Fix audio box visibility**: Ensure pasted or drag-and-dropped audio files render on the canvas
 - [x] **Fix text box sizing**: Auto-resize text boxes to fit content (currently fixed 200x50)
 - [x] **Implement text editing mode**: Double-click on canvas or text box to create/edit text
 - [x] **Add proper mouse cursors**:
@@ -53,17 +54,21 @@
 
 ## Medium Priority - Additional Features
 - [ ] Add video content support (load and display video files)
-- [ ] Add audio content support (load and play audio files)
+- [x] Add audio content support (load and play audio files)
 - [x] Implement pen drawing tool (freeform drawing)
 - [x] Implement segment/line drawing tool
 
+## Medium Priority - Selection Enhancements
+- [ ] Implement marquee "box" selection by dragging on the canvas
+- [ ] Enable multi-object selection driven by the marquee selection
+
 ## Low Priority - Polish and Performance
 - [x] Add undo/redo functionality
-- [ ] Improve UI (tool selection UI, status bar)
+- [x] Improve UI (tool selection UI, status bar)
 - [x] Add keyboard shortcuts for all tools
 - [ ] Support multiple selection of boxes
 - [x] Add box layering/z-index management
-- [ ] Make selection outline lime green for better contrast
+- [x] Make selection outline lime green for better contrast
 
 ## Technical Debt
 - [ ] Improve error handling in clipboard functions

@@ -6,6 +6,8 @@ A GUI canvas application for manipulating media content using raylib.
 
 - Canvas interface for placing and manipulating content boxes
 - Support for text, images, video, audio, and drawings
+- Audio boxes with inline play/pause controls triggered by spacebar or double-click
+- Polished toolbar with hover feedback and a persistent status bar that surfaces contextual hints
 - Move, resize, and delete content boxes
 - Drawing tools: rectangle and circle
 - Paste text from clipboard
@@ -21,12 +23,16 @@ A GUI canvas application for manipulating media content using raylib.
 - Double-click canvas: Create a new text box in edit mode
 - Double-click text/image boxes: Enter text edit mode
 - Ctrl+= / Ctrl+- (text edit): Increase or decrease font size for the active text box; Ctrl+0 resets the size
+- Space (audio box selected): Toggle audio playback
+- Double-click audio box: Toggle audio playback
+- Status bar: Shows current tool, quick tips, and audio readiness
 
 ## Pasting Content
 
 - **Text**: Copy text and press Ctrl+V to create a text box
 - **Images**: Copy the file path of an image (.png, .jpg, .jpeg, .bmp) and press Ctrl+V to load and display the image
-- **Video/Audio**: Not yet implemented (planned for future versions)
+- **Audio**: Copy the file path of an audio file (.wav, .ogg, .mp3, .flac) and press Ctrl+V to create an audio box with playback controls
+- **Video**: Not yet implemented (planned for future versions)
 
 Note: Pasting actual image data from clipboard may cause warnings; use file paths for best results.
 

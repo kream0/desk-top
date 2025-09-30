@@ -39,8 +39,9 @@ typedef struct {
     union {
         Texture2D texture;
         char* text;
-        char* filePath;
+        Sound sound;
     } content;
+    char* filePath;
     int fontSize;
     Color textColor;
     int isSelected;
@@ -64,6 +65,11 @@ static const float TEXT_DRAG_BORDER = 14.0f;
 static const float TOOLBAR_HEIGHT = 64.0f;
 static const float TOOLBAR_PADDING = 10.0f;
 static const float STROKE_THICKNESS = 4.0f;
+static const int AUDIO_BOX_WIDTH = 260;
+static const int AUDIO_BOX_HEIGHT = 96;
+static const float BUTTON_ROUNDNESS = 0.25f;
+static const float STATUS_BAR_HEIGHT = 32.0f;
+static const char* STATUS_DEFAULT_HINT = "Tip: Double-click to edit text • Ctrl+V pastes media";
 
 static const Color TEXT_SELECTION_COLOR = {100, 149, 237, 120};
 static const Color TEXT_EDIT_BORDER_COLOR = {72, 168, 255, 255};
@@ -122,6 +128,7 @@ typedef struct {
     Box box;
     Image imageCopy;
     char* textCopy;
+    char* filePathCopy;
 } BoxSnapshot;
 
 typedef struct {
@@ -141,6 +148,7 @@ static CanvasSnapshot historyStates[MAX_HISTORY];
 static int historyCount = 0;
 static int historyIndex = -1;
 static int suppressHistory = 0;
+static int audioDeviceReady = 0;
 
 const char* GetClipboardTextSafe(void) {
     #ifdef _WIN32
@@ -230,6 +238,120 @@ static char* CopySubstring(const char* start, int length) {
     memcpy(buffer, start, (size_t)length);
     buffer[length] = '\0';
     return buffer;
+}
+
+static void TrimSurroundingQuotes(char* str) {
+    if (str == NULL) {
+        return;
+    }
+    size_t len = strlen(str);
+    if (len >= 2 && ((str[0] == '"' && str[len - 1] == '"') || (str[0] == '\'' && str[len - 1] == '\''))) {
+        memmove(str, str + 1, len - 2);
+        str[len - 2] = '\0';
+        len -= 2;
+    }
+}
+
+static void TrimWhitespace(char* str) {
+    if (str == NULL) {
+        return;
+    }
+    size_t len = strlen(str);
+    while (len > 0 && isspace((unsigned char)str[len - 1])) {
+        str[len - 1] = '\0';
+        len--;
+    }
+    size_t start = 0;
+    while (str[start] != '\0' && isspace((unsigned char)str[start])) {
+        start++;
+    }
+    if (start > 0) {
+        memmove(str, str + start, strlen(str + start) + 1);
+    }
+}
+
+static char* DuplicateSanitizedPath(const char* clipText) {
+    if (clipText == NULL) {
+        return NULL;
+    }
+    char* copy = strdup(clipText);
+    if (copy == NULL) {
+        return NULL;
+    }
+    TrimWhitespace(copy);
+    TrimSurroundingQuotes(copy);
+    return copy;
+}
+
+static const char* ExtractFileName(const char* path) {
+    if (path == NULL) {
+        return "";
+    }
+    const char* slash = strrchr(path, '/');
+    const char* backslash = strrchr(path, '\\');
+    const char* lastSep = slash;
+    if (backslash != NULL && (lastSep == NULL || backslash > lastSep)) {
+        lastSep = backslash;
+    }
+    return (lastSep != NULL) ? lastSep + 1 : path;
+}
+
+static int EqualsIgnoreCase(const char* a, const char* b) {
+    if (a == NULL || b == NULL) {
+        return 0;
+    }
+    while (*a != '\0' && *b != '\0') {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) {
+            return 0;
+        }
+        a++;
+        b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+static void StopAudioPlayback(Box* box) {
+    if (box == NULL || box->type != BOX_AUDIO) {
+        return;
+    }
+    if (audioDeviceReady && IsSoundReady(box->content.sound) && IsSoundPlaying(box->content.sound)) {
+        StopSound(box->content.sound);
+    }
+}
+
+static void ToggleAudioPlayback(Box* box, char* statusMessage, size_t statusMessageSize, float* statusMessageTimer) {
+    if (box == NULL || box->type != BOX_AUDIO) {
+        return;
+    }
+    if (!audioDeviceReady) {
+        if (statusMessage && statusMessageSize > 0 && statusMessageTimer) {
+            snprintf(statusMessage, statusMessageSize, "Audio device unavailable");
+            *statusMessageTimer = 1.8f;
+        }
+        return;
+    }
+    if (!IsSoundReady(box->content.sound)) {
+        if (statusMessage && statusMessageSize > 0 && statusMessageTimer) {
+            snprintf(statusMessage, statusMessageSize, "Audio not ready");
+            *statusMessageTimer = 1.8f;
+        }
+        return;
+    }
+
+    if (IsSoundPlaying(box->content.sound)) {
+        StopSound(box->content.sound);
+        if (statusMessage && statusMessageSize > 0 && statusMessageTimer) {
+            snprintf(statusMessage, statusMessageSize, "Paused %s", ExtractFileName(box->filePath));
+            *statusMessageTimer = 1.4f;
+        }
+    } else {
+        StopSound(box->content.sound);
+        PlaySound(box->content.sound);
+        if (statusMessage && statusMessageSize > 0 && statusMessageTimer) {
+            snprintf(statusMessage, statusMessageSize, "Playing %s", ExtractFileName(box->filePath));
+            *statusMessageTimer = 1.4f;
+        }
+    }
 }
 
 static int MeasureTextSegmentWidth(const char* start, int length, int fontSize) {
@@ -1128,6 +1250,11 @@ int main(void)
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
 
     InitWindow(screenWidth, screenHeight, "Desktop Canvas App");
+    InitAudioDevice();
+    audioDeviceReady = IsAudioDeviceReady();
+    if (!audioDeviceReady) {
+        TraceLog(LOG_WARNING, "Audio device failed to initialize");
+    }
 
     Box boxes[MAX_BOXES];
     int boxCount = 0;
@@ -1149,6 +1276,11 @@ int main(void)
     Box dragStartBox = {0};
     int dragBoxValid = 0;
     int dragChanged = 0;
+
+    if (!audioDeviceReady) {
+        snprintf(statusMessage, sizeof(statusMessage), "Audio disabled: device unavailable");
+        statusMessageTimer = 3.0f;
+    }
 
     /* Double-click detection */
     static double lastClickTime = 0.0;
@@ -1179,6 +1311,7 @@ int main(void)
         Rectangle toolButtons[5];
         Tool toolOrder[5] = {TOOL_SELECT, TOOL_PEN, TOOL_SEGMENT, TOOL_RECT, TOOL_CIRCLE};
         const char* toolLabels[5] = {"Sel", "Pen", "Line", "Rect", "Circ"};
+        const char* toolNames[5] = {"Select", "Pen", "Segment", "Rectangle", "Circle"};
         for (int i = 0; i < 5; i++) {
             toolButtons[i] = (Rectangle){xCursor, TOOLBAR_PADDING, toolButtonWidth, buttonHeight};
             xCursor += toolButtonWidth + 6.0f;
@@ -1213,6 +1346,32 @@ int main(void)
         }
 
         int overToolbar = (mousePos.y <= TOOLBAR_HEIGHT);
+
+        int hoveredToolIndex = -1;
+        int hoveredColorIndex = -1;
+        int hoveredBringToFront = 0;
+        int hoveredSendToBack = 0;
+        int hoveredExport = 0;
+        int hoveredClear = 0;
+
+        if (overToolbar && !showClearConfirm) {
+            for (int i = 0; i < 5; i++) {
+                if (CheckCollisionPointRec(mousePos, toolButtons[i])) {
+                    hoveredToolIndex = i;
+                    break;
+                }
+            }
+            for (int i = 0; i < COLOR_PALETTE_COUNT; i++) {
+                if (CheckCollisionPointRec(mousePos, colorButtons[i])) {
+                    hoveredColorIndex = i;
+                    break;
+                }
+            }
+            hoveredBringToFront = CheckCollisionPointRec(mousePos, bringToFrontButton);
+            hoveredSendToBack = CheckCollisionPointRec(mousePos, sendToBackButton);
+            hoveredExport = CheckCollisionPointRec(mousePos, exportButton);
+            hoveredClear = CheckCollisionPointRec(mousePos, clearButton);
+        }
 
         int hoveredBox = FindTopmostBoxAtPoint(mousePos, boxes, boxCount);
         ResizeMode hoverResizeMode = RESIZE_NONE;
@@ -1397,6 +1556,8 @@ int main(void)
 
                                     if (boxes[clickedBox].type == BOX_TEXT) {
                                         StartTextEdit(clickedBox, boxes);
+                                    } else if (boxes[clickedBox].type == BOX_AUDIO) {
+                                        ToggleAudioPlayback(&boxes[clickedBox], statusMessage, sizeof(statusMessage), &statusMessageTimer);
                                     } else if (boxCount < MAX_BOXES) {
                                         int textWidth, textHeight;
                                         const char* newText = "New text";
@@ -1408,6 +1569,7 @@ int main(void)
                                         boxes[boxCount].height = textHeight;
                                         boxes[boxCount].type = BOX_TEXT;
                                         boxes[boxCount].content.text = strdup(newText);
+                                        boxes[boxCount].filePath = NULL;
                                         boxes[boxCount].fontSize = DEFAULT_FONT_SIZE;
                                         boxes[boxCount].textColor = currentDrawColor;
                                         boxes[boxCount].isSelected = 0;
@@ -1429,6 +1591,7 @@ int main(void)
                                     boxes[boxCount].height = textHeight;
                                     boxes[boxCount].type = BOX_TEXT;
                                     boxes[boxCount].content.text = strdup(newText);
+                                    boxes[boxCount].filePath = NULL;
                                     boxes[boxCount].fontSize = DEFAULT_FONT_SIZE;
                                     boxes[boxCount].textColor = currentDrawColor;
                                     boxes[boxCount].isSelected = 0;
@@ -1601,6 +1764,7 @@ int main(void)
                             boxes[boxCount].height = height;
                             boxes[boxCount].type = BOX_DRAWING;
                             boxes[boxCount].content.texture = rt.texture;
+                            boxes[boxCount].filePath = NULL;
                             boxes[boxCount].isSelected = 0;
                             boxCount++;
                             selectedBox = boxCount - 1;
@@ -1629,6 +1793,7 @@ int main(void)
                             boxes[boxCount].height = height;
                             boxes[boxCount].type = BOX_DRAWING;
                             boxes[boxCount].content.texture = rt.texture;
+                            boxes[boxCount].filePath = NULL;
                             boxes[boxCount].isSelected = 0;
                             boxCount++;
                             selectedBox = boxCount - 1;
@@ -1657,6 +1822,7 @@ int main(void)
                         boxes[boxCount].height = height;
                         boxes[boxCount].type = BOX_DRAWING;
                         boxes[boxCount].content.texture = rt.texture;
+                            boxes[boxCount].filePath = NULL;
                         boxes[boxCount].isSelected = 0;
                         boxCount++;
                         selectedBox = boxCount - 1;
@@ -1689,6 +1855,7 @@ int main(void)
                         boxes[boxCount].height = height;
                         boxes[boxCount].type = BOX_DRAWING;
                         boxes[boxCount].content.texture = rt.texture;
+                        boxes[boxCount].filePath = NULL;
                         boxes[boxCount].isSelected = 0;
                         boxCount++;
                         selectedBox = boxCount - 1;
@@ -1843,6 +2010,10 @@ int main(void)
                     }
                 }
             }
+
+            if (selectedBox != -1 && boxes[selectedBox].type == BOX_AUDIO && IsKeyPressed(KEY_SPACE)) {
+                ToggleAudioPlayback(&boxes[selectedBox], statusMessage, sizeof(statusMessage), &statusMessageTimer);
+            }
         }
 
         /* Paste */
@@ -1871,6 +2042,7 @@ int main(void)
                     boxes[boxCount].height = imgHeight;
                     boxes[boxCount].type = BOX_IMAGE;
                     boxes[boxCount].content.texture = tex;
+                    boxes[boxCount].filePath = NULL;
                     boxes[boxCount].isSelected = 0;
                     boxCount++;
                     selectedBox = boxCount - 1;
@@ -1892,6 +2064,7 @@ int main(void)
                     boxes[boxCount].content.text = strdup(errorText);
                     boxes[boxCount].fontSize = DEFAULT_FONT_SIZE;
                     boxes[boxCount].textColor = currentDrawColor;
+                    boxes[boxCount].filePath = NULL;
                     boxes[boxCount].isSelected = 0;
                     boxCount++;
                     selectedBox = boxCount - 1;
@@ -1903,52 +2076,94 @@ int main(void)
             {
                 const char* clip = GetClipboardTextSafe();
                 if (clip && strlen(clip) > 0 && boxCount < MAX_BOXES) {
-                char* path = strdup(clip);
-                /* Trim quotes if present */
-                if (path[0] == '"' && path[strlen(path)-1] == '"') {
-                    path[strlen(path)-1] = '\0';
-                    path++;
+                char* path = DuplicateSanitizedPath(clip);
+                int handled = 0;
+                if (path && path[0] != '\0') {
+                    const char* ext = strrchr(path, '.');
+                    if (ext != NULL) {
+                        if (EqualsIgnoreCase(ext, ".png") || EqualsIgnoreCase(ext, ".jpg") ||
+                            EqualsIgnoreCase(ext, ".jpeg") || EqualsIgnoreCase(ext, ".bmp")) {
+                            Image img = LoadImage(path);
+                            if (IsImageReady(img)) {
+                                Texture2D tex = LoadTextureFromImage(img);
+                                boxes[boxCount].x = (int)mousePos.x;
+                                boxes[boxCount].y = (int)mousePos.y;
+                                boxes[boxCount].width = img.width;
+                                boxes[boxCount].height = img.height;
+                                boxes[boxCount].type = BOX_IMAGE;
+                                boxes[boxCount].content.texture = tex;
+                                boxes[boxCount].filePath = NULL;
+                                boxes[boxCount].isSelected = 0;
+                                boxCount++;
+                                UnloadImage(img);
+                                handled = 1;
+                                selectedBox = boxCount - 1;
+                                SelectBox(boxes, boxCount, selectedBox);
+                                PushHistoryState(boxes, boxCount, selectedBox);
+                            }
+                        } else if (EqualsIgnoreCase(ext, ".wav") || EqualsIgnoreCase(ext, ".ogg") ||
+                                   EqualsIgnoreCase(ext, ".mp3") || EqualsIgnoreCase(ext, ".flac")) {
+                            if (audioDeviceReady) {
+                                Sound sound = LoadSound(path);
+                                if (IsSoundReady(sound)) {
+                                    boxes[boxCount].x = (int)mousePos.x;
+                                    boxes[boxCount].y = (int)mousePos.y;
+                                    boxes[boxCount].width = AUDIO_BOX_WIDTH;
+                                    boxes[boxCount].height = AUDIO_BOX_HEIGHT;
+                                    boxes[boxCount].type = BOX_AUDIO;
+                                    boxes[boxCount].content.sound = sound;
+                                    boxes[boxCount].filePath = path;
+                                    boxes[boxCount].fontSize = 0;
+                                    boxes[boxCount].textColor = BLACK;
+                                    boxes[boxCount].isSelected = 0;
+                                    boxCount++;
+                                    handled = 1;
+                                    selectedBox = boxCount - 1;
+                                    SelectBox(boxes, boxCount, selectedBox);
+                                    PushHistoryState(boxes, boxCount, selectedBox);
+                                    snprintf(statusMessage, sizeof(statusMessage), "Loaded %s", ExtractFileName(path));
+                                    statusMessageTimer = 1.6f;
+                                } else {
+                                    UnloadSound(sound);
+                                    snprintf(statusMessage, sizeof(statusMessage), "Failed to load %s", ExtractFileName(path));
+                                    statusMessageTimer = 1.8f;
+                                }
+                            } else {
+                                snprintf(statusMessage, sizeof(statusMessage), "Audio device unavailable");
+                                statusMessageTimer = 1.8f;
+                            }
+                        }
+                    }
                 }
-                /* Check if it's an image file path */
-                int isImageFile = 0;
-                const char* ext = strrchr(path, '.');
-                if (ext && (strcmp(ext, ".png") == 0 || strcmp(ext, ".jpg") == 0 || strcmp(ext, ".jpeg") == 0 || strcmp(ext, ".bmp") == 0)) {
-                    Image img = LoadImage(path);
-                    if (IsImageReady(img)) {
-                        Texture2D tex = LoadTextureFromImage(img);
+
+                if (!handled) {
+                    const char* textToUse = path ? path : clip;
+                    char* textBuffer = path ? path : strdup(textToUse);
+                    if (textBuffer != NULL) {
+                        int textWidth, textHeight;
+                        CalculateTextBoxSize(textBuffer, DEFAULT_FONT_SIZE, &textWidth, &textHeight);
+
                         boxes[boxCount].x = (int)mousePos.x;
                         boxes[boxCount].y = (int)mousePos.y;
-                        boxes[boxCount].width = img.width;
-                        boxes[boxCount].height = img.height;
-                        boxes[boxCount].type = BOX_IMAGE;
-                        boxes[boxCount].content.texture = tex;
+                        boxes[boxCount].width = textWidth;
+                        boxes[boxCount].height = textHeight;
+                        boxes[boxCount].type = BOX_TEXT;
+                        boxes[boxCount].content.text = textBuffer;
+                        boxes[boxCount].fontSize = DEFAULT_FONT_SIZE;
+                        boxes[boxCount].textColor = currentDrawColor;
+                        boxes[boxCount].filePath = NULL;
                         boxes[boxCount].isSelected = 0;
                         boxCount++;
-                        UnloadImage(img);
-                        isImageFile = 1;
                         selectedBox = boxCount - 1;
                         SelectBox(boxes, boxCount, selectedBox);
                         PushHistoryState(boxes, boxCount, selectedBox);
+                    } else {
+                        if (path) {
+                            free(path);
+                        }
                     }
-                }
-                if (!isImageFile) {
-                    /* Treat as text - calculate proper dimensions */
-                    int textWidth, textHeight;
-                    CalculateTextBoxSize(path, DEFAULT_FONT_SIZE, &textWidth, &textHeight);
-
-                    boxes[boxCount].x = (int)mousePos.x;
-                    boxes[boxCount].y = (int)mousePos.y;
-                    boxes[boxCount].width = textWidth;
-                    boxes[boxCount].height = textHeight;
-                    boxes[boxCount].type = BOX_TEXT;
-                    boxes[boxCount].content.text = path;
-                    boxes[boxCount].fontSize = DEFAULT_FONT_SIZE;
-                    boxes[boxCount].textColor = currentDrawColor;
-                    boxes[boxCount].isSelected = 0;
-                    boxCount++;
-                    selectedBox = boxCount - 1;
-                    SelectBox(boxes, boxCount, selectedBox);
-                    PushHistoryState(boxes, boxCount, selectedBox);
+                } else if (path && boxes[selectedBox].type != BOX_AUDIO) {
+                    free(path);
                 }
                 }
             }
@@ -1988,6 +2203,41 @@ int main(void)
                         }
                     }
                     break;
+                case BOX_AUDIO:
+                    {
+                        Rectangle backdrop = {(float)box->x, (float)box->y, (float)box->width, (float)box->height};
+                        DrawRectangleRec(backdrop, Fade(SKYBLUE, 0.25f));
+                        DrawRectangleLines(box->x, box->y, box->width, box->height, Fade(DARKBLUE, 0.4f));
+                        const char* fileName = ExtractFileName(box->filePath);
+                        int titleFont = 20;
+                        int titleWidth = MeasureText(fileName, titleFont);
+                        int titleX = box->x + 16;
+                        if (titleWidth > box->width - 32) {
+                            while (titleFont > 12 && MeasureText(fileName, titleFont) > box->width - 32) {
+                                titleFont -= 2;
+                            }
+                        }
+                        DrawText(fileName, titleX, box->y + 16, titleFont, DARKBLUE);
+
+                        int playing = audioDeviceReady && IsSoundReady(box->content.sound) && IsSoundPlaying(box->content.sound);
+                        const char* action = playing ? "Pause (Space / dbl-click)" : "Play (Space / dbl-click)";
+                        int actionFont = 18;
+                        Color actionColor = playing ? DARKGREEN : DARKBLUE;
+                        DrawText(action, box->x + 16, box->y + box->height - 34, actionFont, actionColor);
+
+                        int iconX = box->x + box->width - 48;
+                        int iconY = box->y + (box->height / 2) - 12;
+                        if (playing) {
+                            DrawRectangle(iconX, iconY, 10, 24, actionColor);
+                            DrawRectangle(iconX + 14, iconY, 10, 24, actionColor);
+                        } else {
+                            Vector2 p1 = {(float)iconX, (float)iconY};
+                            Vector2 p2 = {(float)iconX, (float)(iconY + 24)};
+                            Vector2 p3 = {(float)(iconX + 22), (float)(iconY + 12)};
+                            DrawTriangle(p1, p2, p3, actionColor);
+                        }
+                    }
+                    break;
                 case BOX_DRAWING:
                     {
                         Rectangle source = {0.0f, 0.0f, (float)box->content.texture.width, -(float)box->content.texture.height};
@@ -2023,7 +2273,7 @@ int main(void)
 
                 DrawRectangleLinesEx(selectionRect, 2.0f, borderColor);
 
-                if (box->type == BOX_TEXT || box->type == BOX_IMAGE) {
+                if (box->type == BOX_TEXT || box->type == BOX_IMAGE || box->type == BOX_AUDIO) {
                     DrawResizeHandles(box);
                 }
             }
@@ -2059,56 +2309,123 @@ int main(void)
         }
 
         DrawRectangleRec(toolbarRect, Fade(LIGHTGRAY, 0.6f));
-        DrawLine(0, (int)TOOLBAR_HEIGHT, screenWidthCurrent, (int)TOOLBAR_HEIGHT, LIGHTGRAY);
+        DrawRectangleGradientV(0, 0, screenWidthCurrent, (int)TOOLBAR_HEIGHT, Fade(WHITE, 0.25f), Fade(LIGHTGRAY, 0.05f));
+        DrawRectangle(0, (int)TOOLBAR_HEIGHT, screenWidthCurrent, 1, Fade(DARKGRAY, 0.35f));
 
         for (int i = 0; i < 5; i++) {
             int isActive = (currentTool == toolOrder[i]);
-            Color fill = isActive ? Fade(SKYBLUE, 0.7f) : Fade(LIGHTGRAY, 0.5f);
-            DrawRectangleRec(toolButtons[i], fill);
-            DrawRectangleLinesEx(toolButtons[i], 1.0f, DARKGRAY);
+            int isHovered = (i == hoveredToolIndex);
+            Color baseColor = isActive ? SKYBLUE : LIGHTGRAY;
+            float alpha = isActive ? (isHovered ? 0.95f : 0.85f) : (isHovered ? 0.78f : 0.55f);
+            Color fill = Fade(baseColor, alpha);
+            Color outline = isActive ? Fade(DARKBLUE, isHovered ? 0.95f : 0.85f) : (isHovered ? Fade(DARKBLUE, 0.9f) : Fade(DARKGRAY, 0.85f));
+
+            DrawRectangleRounded(toolButtons[i], BUTTON_ROUNDNESS, 6, fill);
+            DrawRectangleRoundedLines(toolButtons[i], BUTTON_ROUNDNESS, 6, 2.0f, outline);
+
+            if (isActive || isHovered) {
+                Rectangle indicator = {
+                    toolButtons[i].x + 10.0f,
+                    toolButtons[i].y + toolButtons[i].height - 6.0f,
+                    toolButtons[i].width - 20.0f,
+                    4.0f
+                };
+                if (indicator.width < 12.0f) {
+                    indicator.width = toolButtons[i].width;
+                    indicator.x = toolButtons[i].x;
+                }
+                Color indicatorColor = isActive ? Fade(DARKBLUE, 0.9f) : Fade(DARKGRAY, 0.7f);
+                DrawRectangleRounded(indicator, 0.5f, 4, indicatorColor);
+            }
+
+            Color labelColor = isActive ? DARKBLUE : (isHovered ? BLACK : DARKGRAY);
             int labelWidth = MeasureText(toolLabels[i], 18);
-            DrawText(toolLabels[i], (int)(toolButtons[i].x + (toolButtons[i].width - labelWidth) / 2.0f), (int)(toolButtons[i].y + (toolButtons[i].height - 18.0f) / 2.0f), 18, BLACK);
+            DrawText(toolLabels[i], (int)(toolButtons[i].x + (toolButtons[i].width - labelWidth) / 2.0f), (int)(toolButtons[i].y + (toolButtons[i].height - 18.0f) / 2.0f), 18, labelColor);
         }
 
         for (int i = 0; i < COLOR_PALETTE_COUNT; i++) {
-            DrawRectangleRec(colorButtons[i], COLOR_PALETTE[i]);
-            DrawRectangleLinesEx(colorButtons[i], 1.0f, DARKGRAY);
-            if (ColorsEqual(currentDrawColor, COLOR_PALETTE[i])) {
-                Rectangle highlight = {colorButtons[i].x - 2.0f, colorButtons[i].y - 2.0f, colorButtons[i].width + 4.0f, colorButtons[i].height + 4.0f};
-                DrawRectangleLinesEx(highlight, 2.0f, BLACK);
+            Rectangle colorRect = colorButtons[i];
+            int isHovered = (i == hoveredColorIndex);
+            int isSelected = ColorsEqual(currentDrawColor, COLOR_PALETTE[i]);
+
+            DrawRectangleRounded(colorRect, BUTTON_ROUNDNESS, 6, COLOR_PALETTE[i]);
+            if (isHovered) {
+                DrawRectangleRounded(colorRect, BUTTON_ROUNDNESS, 6, Fade(WHITE, 0.12f));
             }
+
+            Color outlineColor = isSelected ? BLACK : (isHovered ? Fade(DARKBLUE, 0.85f) : Fade(DARKGRAY, 0.85f));
+            float outlineThickness = isSelected ? 2.0f : 1.5f;
+            DrawRectangleRoundedLines(colorRect, BUTTON_ROUNDNESS, 6, outlineThickness, outlineColor);
         }
 
         int hasSelection = (selectedBox != -1);
-        Color bringFill = hasSelection ? Fade(LIGHTGRAY, 0.6f) : Fade(LIGHTGRAY, 0.3f);
-        Color sendFill = bringFill;
-        Color bringOutline = hasSelection ? DARKGRAY : GRAY;
-        Color sendOutline = bringOutline;
+        int canBring = hasSelection;
+        int canSend = hasSelection;
 
-        DrawRectangleRec(bringToFrontButton, bringFill);
-        DrawRectangleLinesEx(bringToFrontButton, 1.0f, bringOutline);
+        int bringHovered = hoveredBringToFront && canBring;
+        int sendHovered = hoveredSendToBack && canSend;
+
+        Color bringFill = canBring ? Fade(SKYBLUE, bringHovered ? 0.82f : 0.6f) : Fade(LIGHTGRAY, 0.35f);
+        Color bringOutline = canBring ? Fade(DARKBLUE, bringHovered ? 0.9f : 0.7f) : Fade(GRAY, 0.8f);
+        Color bringText = canBring ? (bringHovered ? DARKBLUE : BLACK) : Fade(DARKGRAY, 0.7f);
+
+        DrawRectangleRounded(bringToFrontButton, BUTTON_ROUNDNESS, 6, bringFill);
+        DrawRectangleRoundedLines(bringToFrontButton, BUTTON_ROUNDNESS, 6, 2.0f, bringOutline);
         int topLabel = MeasureText("Top", 18);
-        DrawText("Top", (int)(bringToFrontButton.x + (bringToFrontButton.width - topLabel) / 2.0f), (int)(bringToFrontButton.y + (bringToFrontButton.height - 18.0f) / 2.0f), 18, BLACK);
+        DrawText("Top", (int)(bringToFrontButton.x + (bringToFrontButton.width - topLabel) / 2.0f), (int)(bringToFrontButton.y + (bringToFrontButton.height - 18.0f) / 2.0f), 18, bringText);
 
-        DrawRectangleRec(sendToBackButton, sendFill);
-        DrawRectangleLinesEx(sendToBackButton, 1.0f, sendOutline);
+        Color sendFill = canSend ? Fade(SKYBLUE, sendHovered ? 0.82f : 0.6f) : Fade(LIGHTGRAY, 0.35f);
+        Color sendOutline = canSend ? Fade(DARKBLUE, sendHovered ? 0.9f : 0.7f) : Fade(GRAY, 0.8f);
+        Color sendText = canSend ? (sendHovered ? DARKBLUE : BLACK) : Fade(DARKGRAY, 0.7f);
+
+        DrawRectangleRounded(sendToBackButton, BUTTON_ROUNDNESS, 6, sendFill);
+        DrawRectangleRoundedLines(sendToBackButton, BUTTON_ROUNDNESS, 6, 2.0f, sendOutline);
         int bottomLabel = MeasureText("Bottom", 18);
-        DrawText("Bottom", (int)(sendToBackButton.x + (sendToBackButton.width - bottomLabel) / 2.0f), (int)(sendToBackButton.y + (sendToBackButton.height - 18.0f) / 2.0f), 18, BLACK);
+        DrawText("Bottom", (int)(sendToBackButton.x + (sendToBackButton.width - bottomLabel) / 2.0f), (int)(sendToBackButton.y + (sendToBackButton.height - 18.0f) / 2.0f), 18, sendText);
 
-        DrawRectangleRec(exportButton, Fade(LIGHTGRAY, 0.6f));
-        DrawRectangleLinesEx(exportButton, 1.0f, DARKGRAY);
+        int exportHovered = hoveredExport && !showClearConfirm;
+        Color exportFill = Fade(SKYBLUE, exportHovered ? 0.85f : 0.65f);
+        Color exportOutline = Fade(DARKBLUE, exportHovered ? 0.95f : 0.8f);
+        Color exportText = exportHovered ? DARKBLUE : BLACK;
+
+        DrawRectangleRounded(exportButton, BUTTON_ROUNDNESS, 6, exportFill);
+        DrawRectangleRoundedLines(exportButton, BUTTON_ROUNDNESS, 6, 2.0f, exportOutline);
         int exportLabel = MeasureText("Export", 18);
-        DrawText("Export", (int)(exportButton.x + (exportButton.width - exportLabel) / 2.0f), (int)(exportButton.y + (exportButton.height - 18.0f) / 2.0f), 18, BLACK);
+        DrawText("Export", (int)(exportButton.x + (exportButton.width - exportLabel) / 2.0f), (int)(exportButton.y + (exportButton.height - 18.0f) / 2.0f), 18, exportText);
 
-        Color clearFill = showClearConfirm ? Fade(ORANGE, 0.7f) : Fade(LIGHTGRAY, 0.6f);
-        DrawRectangleRec(clearButton, clearFill);
-        DrawRectangleLinesEx(clearButton, 1.0f, DARKGRAY);
+        int clearHovered = hoveredClear && !showClearConfirm;
+        Color clearBase = showClearConfirm ? ORANGE : SKYBLUE;
+        float clearAlpha = showClearConfirm ? (clearHovered ? 0.95f : 0.8f) : (clearHovered ? 0.9f : 0.65f);
+        Color clearFill = Fade(clearBase, clearAlpha);
+        Color clearOutline = showClearConfirm ? Fade(MAROON, 0.85f) : Fade(DARKBLUE, clearHovered ? 0.95f : 0.8f);
+        Color clearText = showClearConfirm ? MAROON : (clearHovered ? DARKBLUE : BLACK);
+
+        DrawRectangleRounded(clearButton, BUTTON_ROUNDNESS, 6, clearFill);
+        DrawRectangleRoundedLines(clearButton, BUTTON_ROUNDNESS, 6, 2.0f, clearOutline);
         int clearLabel = MeasureText("Clear", 18);
-        DrawText("Clear", (int)(clearButton.x + (clearButton.width - clearLabel) / 2.0f), (int)(clearButton.y + (clearButton.height - 18.0f) / 2.0f), 18, BLACK);
+        DrawText("Clear", (int)(clearButton.x + (clearButton.width - clearLabel) / 2.0f), (int)(clearButton.y + (clearButton.height - 18.0f) / 2.0f), 18, clearText);
 
-        if (statusMessageTimer > 0.0f && statusMessage[0] != '\0') {
-            DrawText(statusMessage, 16, screenHeightCurrent - 28, 18, DARKGRAY);
+        Rectangle statusBarRect = {0.0f, (float)screenHeightCurrent - STATUS_BAR_HEIGHT, (float)screenWidthCurrent, STATUS_BAR_HEIGHT};
+        DrawRectangleRec(statusBarRect, Fade(LIGHTGRAY, 0.45f));
+        DrawRectangleGradientV(0, (int)statusBarRect.y, screenWidthCurrent, (int)STATUS_BAR_HEIGHT, Fade(WHITE, 0.2f), Fade(LIGHTGRAY, 0.05f));
+        DrawRectangle(0, (int)statusBarRect.y, screenWidthCurrent, 1, Fade(DARKGRAY, 0.3f));
+
+        const char* statusTextPtr = statusMessage;
+        char statusFallback[160];
+        if (statusMessageTimer <= 0.0f || statusMessage[0] == '\0') {
+            const char* toolName = toolNames[currentTool];
+            snprintf(statusFallback, sizeof(statusFallback), "Tool: %s • %s", toolName, STATUS_DEFAULT_HINT);
+            statusTextPtr = statusFallback;
         }
+
+        int statusFontSize = 18;
+        int statusY = (int)(statusBarRect.y + (statusBarRect.height - statusFontSize) / 2.0f);
+        DrawText(statusTextPtr, 16, statusY, statusFontSize, DARKGRAY);
+
+        const char* audioStatus = audioDeviceReady ? "Audio ready" : "Audio disabled";
+        Color audioColor = audioDeviceReady ? DARKGREEN : MAROON;
+        int audioWidth = MeasureText(audioStatus, 16);
+        DrawText(audioStatus, screenWidthCurrent - audioWidth - 16, statusY, 16, audioColor);
 
         if (showClearConfirm) {
             DrawRectangle(0, 0, screenWidthCurrent, screenHeightCurrent, Fade(BLACK, 0.45f));
@@ -2138,7 +2455,7 @@ int main(void)
             requestExportClipboard = 0;
             Image screenCapture = LoadImageFromScreen();
             if (IsImageReady(screenCapture)) {
-                int cropHeight = screenCapture.height - (int)TOOLBAR_HEIGHT;
+                int cropHeight = screenCapture.height - (int)TOOLBAR_HEIGHT - (int)STATUS_BAR_HEIGHT;
                 if (cropHeight > 0) {
                     Rectangle cropArea = {0.0f, TOOLBAR_HEIGHT, (float)screenCapture.width, (float)cropHeight};
                     ImageCrop(&screenCapture, cropArea);
@@ -2170,6 +2487,7 @@ int main(void)
         FreeSnapshot(&historyStates[i]);
     }
 
+    CloseAudioDevice();
     CloseWindow();
 
     return 0;
@@ -2194,8 +2512,19 @@ void DestroyBox(Box* box) {
                 box->content.texture.id = 0;
             }
             break;
+        case BOX_AUDIO:
+            if (audioDeviceReady && IsSoundReady(box->content.sound)) {
+                StopAudioPlayback(box);
+                UnloadSound(box->content.sound);
+            }
+            break;
         default:
             break;
+    }
+
+    if (box->filePath != NULL) {
+        free(box->filePath);
+        box->filePath = NULL;
     }
 
     box->isSelected = 0;
@@ -2302,6 +2631,10 @@ void FreeSnapshot(CanvasSnapshot* snapshot) {
             UnloadImage(snapshot->boxes[i].imageCopy);
             snapshot->boxes[i].imageCopy = (Image){0};
         }
+        if (snapshot->boxes[i].filePathCopy != NULL) {
+            free(snapshot->boxes[i].filePathCopy);
+            snapshot->boxes[i].filePathCopy = NULL;
+        }
     }
 
     snapshot->boxCount = 0;
@@ -2325,6 +2658,8 @@ void CaptureSnapshot(CanvasSnapshot* snapshot, Box* boxes, int boxCount, int sel
         dest->box = *src;
         dest->textCopy = NULL;
         dest->imageCopy = (Image){0};
+        dest->filePathCopy = NULL;
+        dest->box.filePath = NULL;
 
         switch (src->type) {
             case BOX_TEXT:
@@ -2341,6 +2676,12 @@ void CaptureSnapshot(CanvasSnapshot* snapshot, Box* boxes, int boxCount, int sel
                     dest->imageCopy = LoadImageFromTexture(src->content.texture);
                 }
                 dest->box.content.texture = (Texture2D){0};
+                break;
+            case BOX_AUDIO:
+                if (src->filePath != NULL) {
+                    dest->filePathCopy = strdup(src->filePath);
+                }
+                dest->box.content.sound = (Sound){0};
                 break;
             default:
                 break;
@@ -2394,6 +2735,7 @@ void RestoreSnapshotState(Box* boxes, int* boxCount, int* selectedBox, int targe
     for (int i = 0; i < snapshot->boxCount; i++) {
         BoxSnapshot* src = &snapshot->boxes[i];
         boxes[i] = src->box;
+        boxes[i].filePath = NULL;
 
         switch (src->box.type) {
             case BOX_TEXT:
@@ -2405,6 +2747,30 @@ void RestoreSnapshotState(Box* boxes, int* boxCount, int* selectedBox, int targe
                     boxes[i].content.texture = LoadTextureFromImage(src->imageCopy);
                 } else {
                     boxes[i].content.texture = (Texture2D){0};
+                }
+                break;
+            case BOX_AUDIO:
+                if (src->filePathCopy != NULL) {
+                    boxes[i].filePath = strdup(src->filePathCopy);
+                }
+                if (boxes[i].filePath != NULL && audioDeviceReady) {
+                    boxes[i].content.sound = LoadSound(boxes[i].filePath);
+                    if (!IsSoundReady(boxes[i].content.sound)) {
+                        UnloadSound(boxes[i].content.sound);
+                        boxes[i].content.sound = (Sound){0};
+                    }
+                }
+                if (!audioDeviceReady || boxes[i].filePath == NULL || !IsSoundReady(boxes[i].content.sound)) {
+                    if (boxes[i].filePath != NULL) {
+                        free(boxes[i].filePath);
+                        boxes[i].filePath = NULL;
+                    }
+                    const char* errorText = "(Audio unavailable)";
+                    boxes[i].type = BOX_TEXT;
+                    boxes[i].content.text = strdup(errorText);
+                    boxes[i].fontSize = DEFAULT_FONT_SIZE;
+                    CalculateTextBoxSize(errorText, boxes[i].fontSize, &boxes[i].width, &boxes[i].height);
+                    boxes[i].textColor = BLACK;
                 }
                 break;
             default:

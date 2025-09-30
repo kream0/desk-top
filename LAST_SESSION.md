@@ -3,6 +3,8 @@
 ## Date: September 30, 2025
 
 ### Completed Work
+- Delivered audio boxes: clipboard path detection, waveform loading, undo-ready persistence, and space/double-click playback toggles with visual status cues.
+- Added playback UI styling with dynamic icons, filename display, and resilient fallbacks when the audio device is unavailable.
 - Enabled per-text-box font sizing with Ctrl +/−/0 shortcuts, auto-resize, undo/redo integration, and live status feedback.
 - Refreshed text node visuals with lime selection outlines, blue editing focus rings, and a caret that tracks font scale.
 - Implemented full text selection and caret navigation: mouse placement, drag selection, Shift+Arrow, Home/End, and vertical movement with column memory.
@@ -14,12 +16,20 @@
 - Preserved trailing spaces and blank lines in text boxes by replacing strtok-based measurement/drawing with allocation-safe helpers.
 - Added text clipboard shortcuts (Ctrl+C/Ctrl+X/Ctrl+V within edits) and Ctrl+Arrow word navigation so text boxes behave like native editors.
 - Cleaned up temporary backup sources and ensured global paste shortcuts no longer interfere while editing text boxes.
+- Polished the toolbar with rounded buttons, hover feedback, palette highlights, and active tool indicators.
+- Introduced a persistent status bar with contextual hints and audio readiness reporting, and excluded it from exported canvas captures.
+
+### Known Issues
+- Pasted or drag-and-dropped audio files currently fail to render their boxes on the canvas.
 
 ### Next Steps
+- Investigate the audio box rendering regression so pasted or drag-and-dropped clips appear reliably.
 - Surface font size controls in the toolbar (slider or preset buttons) and preview the active size.
- - Add hover states, iconography, and richer status feedback to the toolbar.
- - Provide toolbar typography controls (alignment, weight presets) now that font sizing is adjustable.
- - Explore multi-selection and grouping mechanics for boxes to unlock richer canvas workflows.
+- Provide toolbar typography controls (alignment, weight presets) now that font sizing is adjustable.
+- Replace text abbreviations with iconography and optional tooltips to further elevate the toolbar.
+- Explore inline transport controls and visualizers for audio boxes, then expand the pipeline to video playback support.
+- Implement marquee "box" selection via click-and-drag to select multiple items at once.
+- Extend marquee selection to full multi-object workflows (bulk move, layer changes, delete, etc.).
 
 ## Previous Session (September 29, 2025)
 

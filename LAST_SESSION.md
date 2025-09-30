@@ -3,6 +3,8 @@
 ## Date: September 30, 2025
 
 ### Completed Work
+- Enabled per-text-box font sizing with Ctrl +/−/0 shortcuts, auto-resize, undo/redo integration, and live status feedback.
+- Refreshed text node visuals with lime selection outlines, blue editing focus rings, and a caret that tracks font scale.
 - Implemented full text selection and caret navigation: mouse placement, drag selection, Shift+Arrow, Home/End, and vertical movement with column memory.
 - Rendered selection highlights, auto-selected newly created text boxes, and added Ctrl+A and mouse drag behaviours that feed undo history.
 - Added per-text-box color metadata so text nodes default to black and adopt the active palette selection.
@@ -14,9 +16,10 @@
 - Cleaned up temporary backup sources and ensured global paste shortcuts no longer interfere while editing text boxes.
 
 ### Next Steps
-- Add hover states, iconography, and richer status feedback to the toolbar.
-- Layer in visual affordances (selection outline tint, caret styling) that reinforce the richer text editor behaviour.
-- Explore multi-selection and grouping mechanics for boxes to unlock richer canvas workflows.
+- Surface font size controls in the toolbar (slider or preset buttons) and preview the active size.
+ - Add hover states, iconography, and richer status feedback to the toolbar.
+ - Provide toolbar typography controls (alignment, weight presets) now that font sizing is adjustable.
+ - Explore multi-selection and grouping mechanics for boxes to unlock richer canvas workflows.
 
 ## Previous Session (September 29, 2025)
 

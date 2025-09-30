@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <stddef.h>
 
 #ifdef _WIN32
 #include "win_clipboard.h"
@@ -40,6 +41,7 @@ typedef struct {
         char* text;
         char* filePath;
     } content;
+    int fontSize;
     Color textColor;
     int isSelected;
 } Box;
@@ -64,6 +66,8 @@ static const float TOOLBAR_PADDING = 10.0f;
 static const float STROKE_THICKNESS = 4.0f;
 
 static const Color TEXT_SELECTION_COLOR = {100, 149, 237, 120};
+static const Color TEXT_EDIT_BORDER_COLOR = {72, 168, 255, 255};
+static const Color BOX_SELECTION_BORDER_COLOR = {50, 205, 50, 255};
 
 static const Color COLOR_PALETTE[] = {
     BLACK,
@@ -76,11 +80,17 @@ static const Color COLOR_PALETTE[] = {
 };
 
 static const int COLOR_PALETTE_COUNT = (int)(sizeof(COLOR_PALETTE) / sizeof(COLOR_PALETTE[0]));
+static const int DEFAULT_FONT_SIZE = 20;
+static const int MIN_FONT_SIZE = 12;
+static const int MAX_FONT_SIZE = 72;
+static const int FONT_SIZE_STEP = 2;
 
 /* Text editing state */
 int editingBoxIndex = -1;
 char editingText[1024] = {0};
 char editingOriginalText[1024] = {0};
+int editingFontSize = DEFAULT_FONT_SIZE;
+int editingOriginalFontSize = DEFAULT_FONT_SIZE;
 int cursorPosition = 0;
 int selectionStart = 0;
 int selectionEnd = 0;
@@ -98,6 +108,7 @@ Rectangle GetBoxRect(const Box* box);
 int FindTopmostBoxAtPoint(Vector2 point, Box* boxes, int boxCount);
 int IsPointInTextDragZone(const Box* box, Vector2 point);
 void StopTextEditAndRecord(Box* boxes, int boxCount, int selectedBox);
+void StopTextEdit(Box* boxes);
 void DestroyBox(Box* box);
 int BringBoxToFront(Box* boxes, int boxCount, int index);
 int SendBoxToBack(Box* boxes, int boxCount, int index);
@@ -105,6 +116,7 @@ void ClearAllBoxes(Box* boxes, int* boxCount, int* selectedBox);
 void ResetEditingState(void);
 int ColorsEqual(Color a, Color b);
 int CopyImageToClipboard(const Image* image);
+void HandleTextInput(Box* boxes, char* statusMessage, size_t statusMessageSize, float* statusMessageTimer);
 
 typedef struct {
     Box box;
@@ -502,8 +514,13 @@ void CalculateTextBoxSize(const char* text, int fontSize, int* width, int* heigh
     int paddedWidth = maxWidth + 20;   /* 10px padding on each side */
     int paddedHeight = (lineCount * fontSize) + 20;
 
-    if (paddedWidth < 100) paddedWidth = 100;
-    if (paddedHeight < 30) paddedHeight = 30;
+    int minWidth = fontSize * 5;
+    if (minWidth < 80) minWidth = 80;
+    if (paddedWidth < minWidth) paddedWidth = minWidth;
+
+    int minHeight = fontSize + 20;
+    if (minHeight < 30) minHeight = 30;
+    if (paddedHeight < minHeight) paddedHeight = minHeight;
 
     *width = paddedWidth;
     *height = paddedHeight;
@@ -596,6 +613,8 @@ void StartTextEdit(int boxIndex, Box* boxes) {
         editingText[sizeof(editingText) - 1] = '\0';
         strncpy(editingOriginalText, editingText, sizeof(editingOriginalText) - 1);
         editingOriginalText[sizeof(editingOriginalText) - 1] = '\0';
+        editingFontSize = boxes[boxIndex].fontSize > 0 ? boxes[boxIndex].fontSize : DEFAULT_FONT_SIZE;
+        editingOriginalFontSize = editingFontSize;
         cursorPosition = strlen(editingText);
         if (selectAllOnStart) {
             selectionStart = 0;
@@ -622,15 +641,18 @@ void StopTextEdit(Box* boxes) {
 
         /* Resize box to fit new text */
         int textWidth, textHeight;
-        CalculateTextBoxSize(editingText, 20, &textWidth, &textHeight);
+        CalculateTextBoxSize(editingText, editingFontSize, &textWidth, &textHeight);
         boxes[editingBoxIndex].width = textWidth;
         boxes[editingBoxIndex].height = textHeight;
+        boxes[editingBoxIndex].fontSize = editingFontSize;
 
-        lastTextEditChanged = (strcmp(editingOriginalText, editingText) != 0);
+        lastTextEditChanged = (strcmp(editingOriginalText, editingText) != 0) || (editingOriginalFontSize != editingFontSize);
 
         editingBoxIndex = -1;
         memset(editingText, 0, sizeof(editingText));
         memset(editingOriginalText, 0, sizeof(editingOriginalText));
+        editingFontSize = DEFAULT_FONT_SIZE;
+        editingOriginalFontSize = DEFAULT_FONT_SIZE;
         cursorPosition = 0;
         selectionStart = 0;
         selectionEnd = 0;
@@ -651,17 +673,47 @@ void UpdateEditingBoxSize(Box* boxes) {
     if (editingBoxIndex < 0) return;
 
     int textWidth, textHeight;
-    CalculateTextBoxSize(editingText, 20, &textWidth, &textHeight);
+    CalculateTextBoxSize(editingText, editingFontSize, &textWidth, &textHeight);
     boxes[editingBoxIndex].width = textWidth;
     boxes[editingBoxIndex].height = textHeight;
+    boxes[editingBoxIndex].fontSize = editingFontSize;
 }
 
-void HandleTextInput(Box* boxes) {
+void HandleTextInput(Box* boxes, char* statusMessage, size_t statusMessageSize, float* statusMessageTimer) {
     if (editingBoxIndex < 0) return;
 
     int textChanged = 0;
+    int fontSizeChanged = 0;
     int ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
     int shiftDown = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+
+    if (ctrlDown && (IsKeyPressed(KEY_EQUAL) || IsKeyPressed(KEY_KP_ADD))) {
+        int newSize = editingFontSize + FONT_SIZE_STEP;
+        if (newSize > MAX_FONT_SIZE) newSize = MAX_FONT_SIZE;
+        if (newSize != editingFontSize) {
+            editingFontSize = newSize;
+            fontSizeChanged = 1;
+            cursorPreferredColumn = -1;
+        }
+    }
+
+    if (ctrlDown && (IsKeyPressed(KEY_MINUS) || IsKeyPressed(KEY_KP_SUBTRACT))) {
+        int newSize = editingFontSize - FONT_SIZE_STEP;
+        if (newSize < MIN_FONT_SIZE) newSize = MIN_FONT_SIZE;
+        if (newSize != editingFontSize) {
+            editingFontSize = newSize;
+            fontSizeChanged = 1;
+            cursorPreferredColumn = -1;
+        }
+    }
+
+    if (ctrlDown && IsKeyPressed(KEY_ZERO)) {
+        if (editingFontSize != DEFAULT_FONT_SIZE) {
+            editingFontSize = DEFAULT_FONT_SIZE;
+            fontSizeChanged = 1;
+            cursorPreferredColumn = -1;
+        }
+    }
 
     if (ctrlDown && IsKeyPressed(KEY_C)) {
         if (SelectionHasRange()) {
@@ -716,7 +768,7 @@ void HandleTextInput(Box* boxes) {
     /* Handle printable character input */
     int key = GetCharPressed();
     while (key > 0) {
-        if (key >= 32 && key <= 126) {
+        if (!ctrlDown && key >= 32 && key <= 126) {
             int currentLength = (int)strlen(editingText);
             if (currentLength < (int)sizeof(editingText) - 1) {
                 if (DeleteSelectionRange()) {
@@ -835,9 +887,14 @@ void HandleTextInput(Box* boxes) {
         MoveCursorVertical(1, shiftDown);
     }
 
-    if (textChanged) {
+    if (textChanged || fontSizeChanged) {
         UpdateEditingBoxSize(boxes);
         lastTextEditChanged = 1;
+    }
+
+    if (fontSizeChanged && statusMessage && statusMessageSize > 0 && statusMessageTimer) {
+        snprintf(statusMessage, statusMessageSize, "Text size: %d pt", editingFontSize);
+        *statusMessageTimer = 1.4f;
     }
 }
 
@@ -858,7 +915,8 @@ void DrawTextCursor(int x, int y, int fontSize) {
         GetCursorCoordinates(editingText, fontSize, cursorPosition, &relativeX, &relativeY);
         int drawX = x + 10 + relativeX;
         int drawY = y + 10 + relativeY;
-        DrawRectangle(drawX, drawY, 2, fontSize, RED);
+        int caretWidth = (fontSize >= 28) ? 3 : 2;
+        DrawRectangle(drawX, drawY, caretWidth, fontSize, TEXT_EDIT_BORDER_COLOR);
     }
 }
 
@@ -1171,7 +1229,7 @@ int main(void)
         Rectangle confirmNoRect = (Rectangle){0};
 
         if (!showClearConfirm) {
-            HandleTextInput(boxes);
+            HandleTextInput(boxes, statusMessage, sizeof(statusMessage), &statusMessageTimer);
 
             if (IsKeyPressed(KEY_ESCAPE)) {
                 if (editingBoxIndex >= 0) {
@@ -1309,7 +1367,7 @@ int main(void)
                                         mousePos.x - (float)boxes[editingBoxIndex].x,
                                         mousePos.y - (float)boxes[editingBoxIndex].y
                                     };
-                                    int caretIndex = GetTextIndexFromPoint(editingText, 20, localPoint);
+                                    int caretIndex = GetTextIndexFromPoint(editingText, editingFontSize, localPoint);
                                     MoveCursorTo(caretIndex, shiftDown);
                                     isMouseSelecting = 1;
                                     cursorPreferredColumn = -1;
@@ -1342,7 +1400,7 @@ int main(void)
                                     } else if (boxCount < MAX_BOXES) {
                                         int textWidth, textHeight;
                                         const char* newText = "New text";
-                                        CalculateTextBoxSize(newText, 20, &textWidth, &textHeight);
+                                        CalculateTextBoxSize(newText, DEFAULT_FONT_SIZE, &textWidth, &textHeight);
 
                                         boxes[boxCount].x = (int)mousePos.x;
                                         boxes[boxCount].y = (int)mousePos.y;
@@ -1350,6 +1408,7 @@ int main(void)
                                         boxes[boxCount].height = textHeight;
                                         boxes[boxCount].type = BOX_TEXT;
                                         boxes[boxCount].content.text = strdup(newText);
+                                        boxes[boxCount].fontSize = DEFAULT_FONT_SIZE;
                                         boxes[boxCount].textColor = currentDrawColor;
                                         boxes[boxCount].isSelected = 0;
                                         boxCount++;
@@ -1362,7 +1421,7 @@ int main(void)
                                 } else if (boxCount < MAX_BOXES) {
                                     int textWidth, textHeight;
                                     const char* newText = "New text";
-                                    CalculateTextBoxSize(newText, 20, &textWidth, &textHeight);
+                                    CalculateTextBoxSize(newText, DEFAULT_FONT_SIZE, &textWidth, &textHeight);
 
                                     boxes[boxCount].x = (int)mousePos.x;
                                     boxes[boxCount].y = (int)mousePos.y;
@@ -1370,6 +1429,7 @@ int main(void)
                                     boxes[boxCount].height = textHeight;
                                     boxes[boxCount].type = BOX_TEXT;
                                     boxes[boxCount].content.text = strdup(newText);
+                                    boxes[boxCount].fontSize = DEFAULT_FONT_SIZE;
                                     boxes[boxCount].textColor = currentDrawColor;
                                     boxes[boxCount].isSelected = 0;
                                     boxCount++;
@@ -1481,7 +1541,7 @@ int main(void)
                         mousePos.x - (float)boxes[editingBoxIndex].x,
                         mousePos.y - (float)boxes[editingBoxIndex].y
                     };
-                    int caretIndex = GetTextIndexFromPoint(editingText, 20, localPoint);
+                    int caretIndex = GetTextIndexFromPoint(editingText, editingFontSize, localPoint);
                     MoveCursorTo(caretIndex, 1);
                 }
             }
@@ -1822,7 +1882,7 @@ int main(void)
                     /* Fallback: create a text box indicating image paste failed */
                     const char* errorText = "(Image from clipboard - processing failed)";
                     int textWidth, textHeight;
-                    CalculateTextBoxSize(errorText, 20, &textWidth, &textHeight);
+                    CalculateTextBoxSize(errorText, DEFAULT_FONT_SIZE, &textWidth, &textHeight);
 
                     boxes[boxCount].x = (int)mousePos.x;
                     boxes[boxCount].y = (int)mousePos.y;
@@ -1830,6 +1890,7 @@ int main(void)
                     boxes[boxCount].height = textHeight;
                     boxes[boxCount].type = BOX_TEXT;
                     boxes[boxCount].content.text = strdup(errorText);
+                    boxes[boxCount].fontSize = DEFAULT_FONT_SIZE;
                     boxes[boxCount].textColor = currentDrawColor;
                     boxes[boxCount].isSelected = 0;
                     boxCount++;
@@ -1873,7 +1934,7 @@ int main(void)
                 if (!isImageFile) {
                     /* Treat as text - calculate proper dimensions */
                     int textWidth, textHeight;
-                    CalculateTextBoxSize(path, 20, &textWidth, &textHeight);
+                    CalculateTextBoxSize(path, DEFAULT_FONT_SIZE, &textWidth, &textHeight);
 
                     boxes[boxCount].x = (int)mousePos.x;
                     boxes[boxCount].y = (int)mousePos.y;
@@ -1881,6 +1942,7 @@ int main(void)
                     boxes[boxCount].height = textHeight;
                     boxes[boxCount].type = BOX_TEXT;
                     boxes[boxCount].content.text = path;
+                    boxes[boxCount].fontSize = DEFAULT_FONT_SIZE;
                     boxes[boxCount].textColor = currentDrawColor;
                     boxes[boxCount].isSelected = 0;
                     boxCount++;
@@ -1917,11 +1979,12 @@ int main(void)
                         if (textColor.a == 0) {
                             textColor = BLACK;
                         }
+                        int boxFontSize = box->fontSize > 0 ? box->fontSize : DEFAULT_FONT_SIZE;
                         if (editingBoxIndex == i) {
-                            DrawMultilineTextWithSelection(editingText, box->x + 10, box->y + 10, 20, textColor, selectionStart, selectionEnd, TEXT_SELECTION_COLOR);
-                            DrawTextCursor(box->x, box->y, 20);
+                            DrawMultilineTextWithSelection(editingText, box->x + 10, box->y + 10, editingFontSize, textColor, selectionStart, selectionEnd, TEXT_SELECTION_COLOR);
+                            DrawTextCursor(box->x, box->y, editingFontSize);
                         } else {
-                            DrawMultilineTextWithSelection(box->content.text, box->x + 10, box->y + 10, 20, textColor, 0, 0, TEXT_SELECTION_COLOR);
+                            DrawMultilineTextWithSelection(box->content.text, box->x + 10, box->y + 10, boxFontSize, textColor, 0, 0, TEXT_SELECTION_COLOR);
                         }
                     }
                     break;
@@ -1938,7 +2001,27 @@ int main(void)
             }
 
             if (box->isSelected) {
-                DrawRectangleLines(box->x, box->y, box->width, box->height, RED);
+                Rectangle selectionRect = {
+                    (float)box->x - 1.0f,
+                    (float)box->y - 1.0f,
+                    (float)box->width + 2.0f,
+                    (float)box->height + 2.0f
+                };
+
+                Color borderColor = BOX_SELECTION_BORDER_COLOR;
+
+                if (box->type == BOX_TEXT && editingBoxIndex == i) {
+                    Rectangle glowRect = {
+                        selectionRect.x - 2.0f,
+                        selectionRect.y - 2.0f,
+                        selectionRect.width + 4.0f,
+                        selectionRect.height + 4.0f
+                    };
+                    DrawRectangleLinesEx(glowRect, 2.0f, Fade(TEXT_EDIT_BORDER_COLOR, 0.35f));
+                    borderColor = TEXT_EDIT_BORDER_COLOR;
+                }
+
+                DrawRectangleLinesEx(selectionRect, 2.0f, borderColor);
 
                 if (box->type == BOX_TEXT || box->type == BOX_IMAGE) {
                     DrawResizeHandles(box);
@@ -2168,6 +2251,9 @@ void ClearAllBoxes(Box* boxes, int* boxCount, int* selectedBox) {
 void ResetEditingState(void) {
     editingBoxIndex = -1;
     memset(editingText, 0, sizeof(editingText));
+    memset(editingOriginalText, 0, sizeof(editingOriginalText));
+    editingFontSize = DEFAULT_FONT_SIZE;
+    editingOriginalFontSize = DEFAULT_FONT_SIZE;
     cursorPosition = 0;
     cursorBlinkTime = 0.0f;
     selectionStart = 0;

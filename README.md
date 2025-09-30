@@ -18,6 +18,9 @@ A GUI canvas application for manipulating media content using raylib.
 - Mouse: Select, move, resize boxes; draw shapes
 - Delete: Remove selected box
 - Ctrl+V: Paste text or image file path
+- Double-click canvas: Create a new text box in edit mode
+- Double-click text/image boxes: Enter text edit mode
+- Ctrl+= / Ctrl+- (text edit): Increase or decrease font size for the active text box; Ctrl+0 resets the size
 
 ## Pasting Content
 

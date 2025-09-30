@@ -48,6 +48,8 @@
 - [x] Automatically select (highlight) newly created text boxes
 - [x] Preserve trailing spaces and blank lines in text boxes after exiting edit mode
 - [x] Support text clipboard workflows and navigation shortcuts (Ctrl+C/X/V, Ctrl+A, Ctrl+Arrow, Ctrl+Home/End)
+- [x] Add per-text-box font sizing controls (Ctrl +/−/0) with live auto-resize
+- [x] Highlight active text edits with dedicated focus outline and caret styling
 
 ## Medium Priority - Additional Features
 - [ ] Add video content support (load and display video files)

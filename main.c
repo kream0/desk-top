@@ -40,7 +40,7 @@ typedef struct {
     union {
         Texture2D texture;
         char* text;
-        Sound sound;
+        Music music;
         WinVideoPlayer* video;
     } content;
     char* filePath;
@@ -51,6 +51,19 @@ typedef struct {
     int videoFallbackFrames;
     int videoReportedDecoded;
     int videoReportedFallback;
+    float videoConvertAvgUs;
+    float videoConvertPeakUs;
+    float videoConvertLastUs;
+    unsigned int videoConvertSamples;
+    char videoFormatLabel[8];
+    float videoPositionSeconds;
+    float videoDurationSeconds;
+    int videoLoop;
+    int audioLoop;
+    int audioStreamStarted;
+    int audioWasPlaying;
+    float audioTimePlayed;
+    float audioDurationSeconds;
 } Box;
 
 typedef enum {
@@ -326,8 +339,18 @@ static void StopAudioPlayback(Box* box) {
     if (box == NULL || box->type != BOX_AUDIO) {
         return;
     }
-    if (audioDeviceReady && IsSoundReady(box->content.sound) && IsSoundPlaying(box->content.sound)) {
-        StopSound(box->content.sound);
+    if (!audioDeviceReady) {
+        box->audioStreamStarted = 0;
+        box->audioWasPlaying = 0;
+        box->audioTimePlayed = 0.0f;
+        return;
+    }
+    if (IsMusicReady(box->content.music)) {
+        StopMusicStream(box->content.music);
+        SeekMusicStream(box->content.music, 0.0f);
+        box->audioStreamStarted = 0;
+        box->audioWasPlaying = 0;
+        box->audioTimePlayed = 0.0f;
     }
 }
 
@@ -342,7 +365,7 @@ static void ToggleAudioPlayback(Box* box, char* statusMessage, size_t statusMess
         }
         return;
     }
-    if (!IsSoundReady(box->content.sound)) {
+    if (!IsMusicReady(box->content.music)) {
         if (statusMessage && statusMessageSize > 0 && statusMessageTimer) {
             snprintf(statusMessage, statusMessageSize, "Audio not ready");
             *statusMessageTimer = 1.8f;
@@ -350,15 +373,30 @@ static void ToggleAudioPlayback(Box* box, char* statusMessage, size_t statusMess
         return;
     }
 
-    if (IsSoundPlaying(box->content.sound)) {
-        StopSound(box->content.sound);
+    int isPlaying = box->audioStreamStarted && IsMusicStreamPlaying(box->content.music);
+    float length = GetMusicTimeLength(box->content.music);
+    if (length < 0.0f) length = 0.0f;
+    float played = GetMusicTimePlayed(box->content.music);
+
+    if (isPlaying) {
+        PauseMusicStream(box->content.music);
+        box->audioWasPlaying = 0;
         if (statusMessage && statusMessageSize > 0 && statusMessageTimer) {
             snprintf(statusMessage, statusMessageSize, "Paused %s", ExtractFileName(box->filePath));
             *statusMessageTimer = 1.4f;
         }
     } else {
-        StopSound(box->content.sound);
-        PlaySound(box->content.sound);
+        if (!box->audioStreamStarted) {
+            PlayMusicStream(box->content.music);
+            box->audioStreamStarted = 1;
+        } else {
+            if (length > 0.0f && played >= length - 0.01f) {
+                SeekMusicStream(box->content.music, 0.0f);
+            }
+            ResumeMusicStream(box->content.music);
+        }
+        box->content.music.looping = box->audioLoop ? true : false;
+        box->audioWasPlaying = 1;
         if (statusMessage && statusMessageSize > 0 && statusMessageTimer) {
             snprintf(statusMessage, statusMessageSize, "Playing %s", ExtractFileName(box->filePath));
             *statusMessageTimer = 1.4f;
@@ -413,6 +451,113 @@ void ToggleVideoPlayback(Box* box, char* statusMessage, size_t statusMessageSize
         }
         *statusMessageTimer = 1.6f;
     }
+}
+
+static void FormatTimeString(double seconds, char* buffer, size_t bufferSize) {
+    if (buffer == NULL || bufferSize == 0) {
+        return;
+    }
+    if (seconds < 0.0) {
+        seconds = 0.0;
+    }
+    int totalSeconds = (int)seconds;
+    int minutes = totalSeconds / 60;
+    int secs = totalSeconds % 60;
+    snprintf(buffer, bufferSize, "%d:%02d", minutes, secs);
+}
+
+static Rectangle GetAudioPlayButtonRect(const Box* box) {
+    Rectangle rect = {0};
+    if (box == NULL) {
+        return rect;
+    }
+    const float padding = 16.0f;
+    const float size = 28.0f;
+    rect.x = (float)box->x + padding;
+    rect.y = (float)box->y + (float)box->height - padding - size;
+    rect.width = size;
+    rect.height = size;
+    return rect;
+}
+
+static Rectangle GetAudioLoopButtonRect(const Box* box) {
+    Rectangle rect = {0};
+    if (box == NULL) {
+        return rect;
+    }
+    const float padding = 16.0f;
+    const float size = 28.0f;
+    rect.x = (float)box->x + (float)box->width - padding - size;
+    rect.y = (float)box->y + (float)box->height - padding - size;
+    rect.width = size;
+    rect.height = size;
+    return rect;
+}
+
+static Rectangle GetAudioProgressRect(const Box* box) {
+    Rectangle rect = {0};
+    if (box == NULL) {
+        return rect;
+    }
+    Rectangle playRect = GetAudioPlayButtonRect(box);
+    Rectangle loopRect = GetAudioLoopButtonRect(box);
+    const float spacing = 12.0f;
+    rect.x = playRect.x + playRect.width + spacing;
+    float rightEdge = loopRect.x - spacing;
+    rect.width = rightEdge - rect.x;
+    if (rect.width < 24.0f) {
+        rect.width = 24.0f;
+    }
+    rect.height = 8.0f;
+    rect.y = playRect.y + playRect.height * 0.5f - rect.height * 0.5f;
+    return rect;
+}
+
+static Rectangle GetVideoPlayButtonRect(const Box* box) {
+    Rectangle rect = {0};
+    if (box == NULL) {
+        return rect;
+    }
+    const float padding = 18.0f;
+    const float size = 32.0f;
+    rect.x = (float)box->x + padding;
+    rect.y = (float)box->y + (float)box->height - padding - size;
+    rect.width = size;
+    rect.height = size;
+    return rect;
+}
+
+static Rectangle GetVideoLoopButtonRect(const Box* box) {
+    Rectangle rect = {0};
+    if (box == NULL) {
+        return rect;
+    }
+    const float padding = 18.0f;
+    const float size = 32.0f;
+    rect.x = (float)box->x + (float)box->width - padding - size;
+    rect.y = (float)box->y + (float)box->height - padding - size;
+    rect.width = size;
+    rect.height = size;
+    return rect;
+}
+
+static Rectangle GetVideoProgressRect(const Box* box) {
+    Rectangle rect = {0};
+    if (box == NULL) {
+        return rect;
+    }
+    Rectangle playRect = GetVideoPlayButtonRect(box);
+    Rectangle loopRect = GetVideoLoopButtonRect(box);
+    const float spacing = 14.0f;
+    rect.x = playRect.x + playRect.width + spacing;
+    float rightEdge = loopRect.x - spacing;
+    rect.width = rightEdge - rect.x;
+    if (rect.width < 32.0f) {
+        rect.width = 32.0f;
+    }
+    rect.height = 10.0f;
+    rect.y = playRect.y + playRect.height * 0.5f - rect.height * 0.5f;
+    return rect;
 }
 
 static int MeasureTextSegmentWidth(const char* start, int length, int fontSize) {
@@ -1371,9 +1516,28 @@ int main(void)
 
             int decoded = WinVideo_GetDecodedFrameCount(boxes[i].content.video);
             int fallback = WinVideo_GetFallbackFrameCount(boxes[i].content.video);
+            double avgConvertUs = WinVideo_GetConvertCpuAverageMicros(boxes[i].content.video);
+            double peakConvertUs = WinVideo_GetConvertCpuPeakMicros(boxes[i].content.video);
+            double lastConvertUs = WinVideo_GetConvertCpuLastMicros(boxes[i].content.video);
+            unsigned int samples = WinVideo_GetConvertCpuSampleCount(boxes[i].content.video);
+            const char* formatLabel = WinVideo_GetSampleFormatLabel(boxes[i].content.video);
+            if (formatLabel == NULL || formatLabel[0] == '\0') {
+                formatLabel = "Unknown";
+            }
+
+            unsigned int previousSamples = boxes[i].videoConvertSamples;
 
             boxes[i].videoDecodedFrames = decoded;
             boxes[i].videoFallbackFrames = fallback;
+            boxes[i].videoConvertAvgUs = (float)avgConvertUs;
+            boxes[i].videoConvertPeakUs = (float)peakConvertUs;
+            boxes[i].videoConvertLastUs = (float)lastConvertUs;
+            boxes[i].videoConvertSamples = samples;
+            strncpy(boxes[i].videoFormatLabel, formatLabel, sizeof(boxes[i].videoFormatLabel) - 1);
+            boxes[i].videoFormatLabel[sizeof(boxes[i].videoFormatLabel) - 1] = '\0';
+            boxes[i].videoDurationSeconds = (float)WinVideo_GetDurationSeconds(boxes[i].content.video);
+            boxes[i].videoPositionSeconds = (float)WinVideo_GetPositionSeconds(boxes[i].content.video);
+            boxes[i].videoLoop = WinVideo_IsLooping(boxes[i].content.video);
 
             if (decoded <= 0 && fallback <= 0) {
                 boxes[i].videoReportedDecoded = 0;
@@ -1387,6 +1551,12 @@ int main(void)
                 if (decoded > boxes[i].videoReportedDecoded) {
                     boxes[i].videoReportedDecoded = decoded;
                 }
+            } else if (previousSamples == 0 && samples > 0 && statusMessageTimer <= 0.1f) {
+                const char* fileName = boxes[i].filePath != NULL ? ExtractFileName(boxes[i].filePath) : "(Video)";
+                float avgMs = (float)(avgConvertUs / 1000.0);
+                float peakMs = (float)(peakConvertUs / 1000.0);
+                snprintf(statusMessage, sizeof(statusMessage), "Video convert: %s • %s %.2f ms avg (%.2f ms peak)", fileName, formatLabel, avgMs, peakMs);
+                statusMessageTimer = 2.2f;
             } else if (fallback == 0 && decoded > 0 && boxes[i].videoReportedDecoded == 0 && statusMessageTimer <= 0.05f) {
                 const char* fileName = boxes[i].filePath != NULL ? ExtractFileName(boxes[i].filePath) : "(Video)";
                 snprintf(statusMessage, sizeof(statusMessage), "Video ready: %s • %d decoded frames", fileName, decoded);
@@ -1616,6 +1786,41 @@ int main(void)
                             };
 
                             if (!CheckCollisionPointRec(mousePos, editingRect)) {
+                        for (int i = 0; i < boxCount; i++) {
+                            if (boxes[i].type != BOX_AUDIO) {
+                                continue;
+                            }
+
+                            if (!audioDeviceReady || !IsMusicReady(boxes[i].content.music)) {
+                                boxes[i].audioTimePlayed = 0.0f;
+                                if (!audioDeviceReady) {
+                                    boxes[i].audioStreamStarted = 0;
+                                    boxes[i].audioWasPlaying = 0;
+                                }
+                                continue;
+                            }
+
+                            boxes[i].content.music.looping = boxes[i].audioLoop ? 1 : 0;
+
+                            if (boxes[i].audioStreamStarted) {
+                                UpdateMusicStream(boxes[i].content.music);
+                            }
+
+                            boxes[i].audioDurationSeconds = GetMusicTimeLength(boxes[i].content.music);
+                            boxes[i].audioTimePlayed = GetMusicTimePlayed(boxes[i].content.music);
+
+                            int playing = IsMusicStreamPlaying(boxes[i].content.music);
+                            if (!playing && boxes[i].audioStreamStarted && boxes[i].audioWasPlaying) {
+                                if (boxes[i].audioLoop && boxes[i].audioDurationSeconds > 0.0f) {
+                                    SeekMusicStream(boxes[i].content.music, 0.0f);
+                                    PlayMusicStream(boxes[i].content.music);
+                                    boxes[i].audioStreamStarted = 1;
+                                    playing = 1;
+                                }
+                            }
+
+                            boxes[i].audioWasPlaying = playing;
+                        }
                                 StopTextEditAndRecord(boxes, boxCount, selectedBox);
                             } else {
                                 ResizeMode editHover = GetResizeModeForPoint(&boxes[editingBoxIndex], mousePos);
@@ -1715,6 +1920,101 @@ int main(void)
 
                         int clickedBox = FindTopmostBoxAtPoint(mousePos, boxes, boxCount);
                         if (clickedBox != -1) {
+                            Box* targetBox = &boxes[clickedBox];
+                            int handledTransport = 0;
+                            if (targetBox->type == BOX_AUDIO) {
+                                Rectangle playRect = GetAudioPlayButtonRect(targetBox);
+                                Rectangle loopRect = GetAudioLoopButtonRect(targetBox);
+                                Rectangle progressRect = GetAudioProgressRect(targetBox);
+                                if (CheckCollisionPointRec(mousePos, playRect)) {
+                                    ToggleAudioPlayback(targetBox, statusMessage, sizeof(statusMessage), &statusMessageTimer);
+                                    handledTransport = 1;
+                                } else if (CheckCollisionPointRec(mousePos, loopRect)) {
+                                    targetBox->audioLoop = targetBox->audioLoop ? 0 : 1;
+                                    if (audioDeviceReady && IsMusicReady(targetBox->content.music)) {
+                                        targetBox->content.music.looping = targetBox->audioLoop ? 1 : 0;
+                                    }
+                                    if (statusMessage && statusMessageTimer) {
+                                        snprintf(statusMessage, sizeof(statusMessage), "Audio loop %s", targetBox->audioLoop ? "enabled" : "disabled");
+                                        statusMessageTimer = 1.4f;
+                                    }
+                                    handledTransport = 2;
+                                } else if (CheckCollisionPointRec(mousePos, progressRect)) {
+                                    if (audioDeviceReady && IsMusicReady(targetBox->content.music)) {
+                                        float ratio = (float)((mousePos.x - progressRect.x) / progressRect.width);
+                                        if (ratio < 0.0f) ratio = 0.0f;
+                                        if (ratio > 1.0f) ratio = 1.0f;
+                                        float length = targetBox->audioDurationSeconds;
+                                        if (length > 0.01f) {
+                                            float targetSeconds = length * ratio;
+                                            SeekMusicStream(targetBox->content.music, targetSeconds);
+                                            targetBox->audioTimePlayed = targetSeconds;
+                                            if (targetBox->audioStreamStarted) {
+                                                UpdateMusicStream(targetBox->content.music);
+                                            }
+                                            if (statusMessage && statusMessageTimer) {
+                                                char timeNow[16];
+                                                char timeTotal[16];
+                                                FormatTimeString(targetSeconds, timeNow, sizeof(timeNow));
+                                                FormatTimeString(length, timeTotal, sizeof(timeTotal));
+                                                snprintf(statusMessage, sizeof(statusMessage), "%s / %s", timeNow, timeTotal);
+                                                statusMessageTimer = 1.2f;
+                                            }
+                                        }
+                                    }
+                                    handledTransport = 3;
+                                }
+                            } else if (targetBox->type == BOX_VIDEO && targetBox->content.video != NULL) {
+                                Rectangle playRect = GetVideoPlayButtonRect(targetBox);
+                                Rectangle loopRect = GetVideoLoopButtonRect(targetBox);
+                                Rectangle progressRect = GetVideoProgressRect(targetBox);
+                                if (CheckCollisionPointRec(mousePos, playRect)) {
+                                    ToggleVideoPlayback(targetBox, statusMessage, sizeof(statusMessage), &statusMessageTimer);
+                                    handledTransport = 1;
+                                } else if (CheckCollisionPointRec(mousePos, loopRect)) {
+                                    targetBox->videoLoop = targetBox->videoLoop ? 0 : 1;
+                                    WinVideo_SetLooping(targetBox->content.video, targetBox->videoLoop);
+                                    if (statusMessage && statusMessageTimer) {
+                                        snprintf(statusMessage, sizeof(statusMessage), "Video loop %s", targetBox->videoLoop ? "enabled" : "disabled");
+                                        statusMessageTimer = 1.4f;
+                                    }
+                                    handledTransport = 2;
+                                } else if (CheckCollisionPointRec(mousePos, progressRect)) {
+                                    double duration = WinVideo_GetDurationSeconds(targetBox->content.video);
+                                    if (duration > 0.01) {
+                                        double ratio = (mousePos.x - progressRect.x) / progressRect.width;
+                                        if (ratio < 0.0) ratio = 0.0;
+                                        if (ratio > 1.0) ratio = 1.0;
+                                        double targetSeconds = duration * ratio;
+                                        WinVideo_SetPositionSeconds(targetBox->content.video, targetSeconds);
+                                        targetBox->videoPositionSeconds = (float)targetSeconds;
+                                        if (statusMessage && statusMessageTimer) {
+                                            char timeNow[16];
+                                            char timeTotal[16];
+                                            FormatTimeString(targetSeconds, timeNow, sizeof(timeNow));
+                                            FormatTimeString(duration, timeTotal, sizeof(timeTotal));
+                                            snprintf(statusMessage, sizeof(statusMessage), "%s / %s", timeNow, timeTotal);
+                                            statusMessageTimer = 1.2f;
+                                        }
+                                    }
+                                    handledTransport = 3;
+                                }
+                            }
+
+                            if (handledTransport) {
+                                selectedBox = clickedBox;
+                                SelectBox(boxes, boxCount, selectedBox);
+                                resizeMode = RESIZE_NONE;
+                                isDragging = 0;
+                                dragBoxValid = 0;
+                                dragChanged = 0;
+                                if (handledTransport == 2) {
+                                    PushHistoryState(boxes, boxCount, selectedBox);
+                                }
+                                lastClickTime = 0.0;
+                                continue;
+                            }
+
                             selectedBox = clickedBox;
                             SelectBox(boxes, boxCount, selectedBox);
                             resizeMode = GetResizeModeForPoint(&boxes[selectedBox], mousePos);
@@ -2166,15 +2466,16 @@ int main(void)
                                                      EqualsIgnoreCase(ext, ".mp3") || EqualsIgnoreCase(ext, ".flac"))) {
                             char* storedPath = strdup(filePath);
                             if (storedPath != NULL) {
-                                Sound sound = (Sound){0};
-                                int soundReady = 0;
+                                Music music = (Music){0};
+                                int musicReady = 0;
                                 if (audioDeviceReady) {
-                                    Sound loaded = LoadSound(filePath);
-                                    if (IsSoundReady(loaded)) {
-                                        sound = loaded;
-                                        soundReady = 1;
+                                    Music loaded = LoadMusicStream(filePath);
+                                    if (IsMusicReady(loaded)) {
+                                        music = loaded;
+                                        musicReady = 1;
+                                        music.looping = 0;
                                     } else {
-                                        UnloadSound(loaded);
+                                        UnloadMusicStream(loaded);
                                     }
                                 }
 
@@ -2183,10 +2484,15 @@ int main(void)
                                 boxes[boxCount].width = AUDIO_BOX_WIDTH;
                                 boxes[boxCount].height = AUDIO_BOX_HEIGHT;
                                 boxes[boxCount].type = BOX_AUDIO;
-                                boxes[boxCount].content.sound = sound;
+                                boxes[boxCount].content.music = music;
                                 boxes[boxCount].filePath = storedPath;
                                 boxes[boxCount].fontSize = 0;
                                 boxes[boxCount].textColor = BLACK;
+                                boxes[boxCount].audioLoop = 0;
+                                boxes[boxCount].audioStreamStarted = 0;
+                                boxes[boxCount].audioWasPlaying = 0;
+                                boxes[boxCount].audioTimePlayed = 0.0f;
+                                boxes[boxCount].audioDurationSeconds = musicReady ? GetMusicTimeLength(music) : 0.0f;
                                 boxes[boxCount].isSelected = 0;
                                 boxCount++;
                                 selectedBox = boxCount - 1;
@@ -2195,7 +2501,7 @@ int main(void)
                                 created = 1;
 
                                 const char* audioName = ExtractFileName(storedPath);
-                                if (soundReady) {
+                                if (musicReady) {
                                     snprintf(statusMessage, sizeof(statusMessage), "Loaded %s", audioName);
                                     statusMessageTimer = 1.6f;
                                 } else if (!audioDeviceReady) {
@@ -2227,6 +2533,21 @@ int main(void)
                                     boxes[boxCount].videoFallbackFrames = WinVideo_GetFallbackFrameCount(player);
                                     boxes[boxCount].videoReportedDecoded = 0;
                                     boxes[boxCount].videoReportedFallback = 0;
+                                    boxes[boxCount].videoConvertAvgUs = 0.0f;
+                                    boxes[boxCount].videoConvertPeakUs = 0.0f;
+                                    boxes[boxCount].videoConvertLastUs = 0.0f;
+                                    boxes[boxCount].videoConvertSamples = 0u;
+                                    const char* newFormatLabel = WinVideo_GetSampleFormatLabel(player);
+                                    if (newFormatLabel != NULL) {
+                                        strncpy(boxes[boxCount].videoFormatLabel, newFormatLabel, sizeof(boxes[boxCount].videoFormatLabel) - 1);
+                                        boxes[boxCount].videoFormatLabel[sizeof(boxes[boxCount].videoFormatLabel) - 1] = '\0';
+                                    } else {
+                                        boxes[boxCount].videoFormatLabel[0] = '\0';
+                                    }
+                                    WinVideo_SetLooping(player, 0);
+                                    boxes[boxCount].videoLoop = 0;
+                                    boxes[boxCount].videoDurationSeconds = (float)WinVideo_GetDurationSeconds(player);
+                                    boxes[boxCount].videoPositionSeconds = (float)WinVideo_GetPositionSeconds(player);
                                     ConfigureVideoBoxSize(&boxes[boxCount], tex);
                                     if (boxes[boxCount].width <= 0) boxes[boxCount].width = DEFAULT_VIDEO_BOX_WIDTH;
                                     if (boxes[boxCount].height <= 0) boxes[boxCount].height = DEFAULT_VIDEO_BOX_HEIGHT;
@@ -2391,15 +2712,16 @@ int main(void)
                                 }
                             } else if (EqualsIgnoreCase(ext, ".wav") || EqualsIgnoreCase(ext, ".ogg") ||
                                        EqualsIgnoreCase(ext, ".mp3") || EqualsIgnoreCase(ext, ".flac")) {
-                                Sound sound = {0};
-                                int soundReady = 0;
+                                Music music = {0};
+                                int musicReady = 0;
                                 if (audioDeviceReady) {
-                                    Sound loaded = LoadSound(path);
-                                    if (IsSoundReady(loaded)) {
-                                        sound = loaded;
-                                        soundReady = 1;
+                                    Music loaded = LoadMusicStream(path);
+                                    if (IsMusicReady(loaded)) {
+                                        music = loaded;
+                                        musicReady = 1;
+                                        music.looping = 0;
                                     } else {
-                                        UnloadSound(loaded);
+                                        UnloadMusicStream(loaded);
                                     }
                                 }
 
@@ -2408,10 +2730,15 @@ int main(void)
                                 boxes[boxCount].width = AUDIO_BOX_WIDTH;
                                 boxes[boxCount].height = AUDIO_BOX_HEIGHT;
                                 boxes[boxCount].type = BOX_AUDIO;
-                                boxes[boxCount].content.sound = sound;
+                                boxes[boxCount].content.music = music;
                                 boxes[boxCount].filePath = path;
                                 boxes[boxCount].fontSize = 0;
                                 boxes[boxCount].textColor = BLACK;
+                                boxes[boxCount].audioLoop = 0;
+                                boxes[boxCount].audioStreamStarted = 0;
+                                boxes[boxCount].audioWasPlaying = 0;
+                                boxes[boxCount].audioTimePlayed = 0.0f;
+                                boxes[boxCount].audioDurationSeconds = musicReady ? GetMusicTimeLength(music) : 0.0f;
                                 boxes[boxCount].isSelected = 0;
                                 boxCount++;
                                 handled = 1;
@@ -2421,7 +2748,7 @@ int main(void)
 
                                 const char* audioName = ExtractFileName(path);
 
-                                if (soundReady) {
+                                if (musicReady) {
                                     snprintf(statusMessage, sizeof(statusMessage), "Loaded %s", audioName);
                                     statusMessageTimer = 1.6f;
                                 } else if (!audioDeviceReady) {
@@ -2450,6 +2777,21 @@ int main(void)
                                     boxes[boxCount].videoFallbackFrames = WinVideo_GetFallbackFrameCount(player);
                                     boxes[boxCount].videoReportedDecoded = 0;
                                     boxes[boxCount].videoReportedFallback = 0;
+                                    boxes[boxCount].videoConvertAvgUs = 0.0f;
+                                    boxes[boxCount].videoConvertPeakUs = 0.0f;
+                                    boxes[boxCount].videoConvertLastUs = 0.0f;
+                                    boxes[boxCount].videoConvertSamples = 0u;
+                                    const char* newFormatLabel = WinVideo_GetSampleFormatLabel(player);
+                                    if (newFormatLabel != NULL) {
+                                        strncpy(boxes[boxCount].videoFormatLabel, newFormatLabel, sizeof(boxes[boxCount].videoFormatLabel) - 1);
+                                        boxes[boxCount].videoFormatLabel[sizeof(boxes[boxCount].videoFormatLabel) - 1] = '\0';
+                                    } else {
+                                        boxes[boxCount].videoFormatLabel[0] = '\0';
+                                    }
+                                    WinVideo_SetLooping(player, 0);
+                                    boxes[boxCount].videoLoop = 0;
+                                    boxes[boxCount].videoDurationSeconds = (float)WinVideo_GetDurationSeconds(player);
+                                    boxes[boxCount].videoPositionSeconds = (float)WinVideo_GetPositionSeconds(player);
                                     ConfigureVideoBoxSize(&boxes[boxCount], tex);
                                     if (boxes[boxCount].width <= 0) boxes[boxCount].width = DEFAULT_VIDEO_BOX_WIDTH;
                                     if (boxes[boxCount].height <= 0) boxes[boxCount].height = DEFAULT_VIDEO_BOX_HEIGHT;
@@ -2541,67 +2883,114 @@ int main(void)
                             textColor = BLACK;
                         }
                         int boxFontSize = box->fontSize > 0 ? box->fontSize : DEFAULT_FONT_SIZE;
+
+                        Rectangle playRect = GetAudioPlayButtonRect(box);
+                        Rectangle loopRect = GetAudioLoopButtonRect(box);
+                        Rectangle progressRect = GetAudioProgressRect(box);
+
+                        int musicReady = audioDeviceReady && IsMusicReady(box->content.music);
+                        int playing = musicReady && IsMusicStreamPlaying(box->content.music);
+
+                        float duration = box->audioDurationSeconds;
+                        float played = box->audioTimePlayed;
+                        if (duration < 0.0f) duration = 0.0f;
+                        if (played < 0.0f) played = 0.0f;
+                        if (duration > 0.0f && played > duration) played = duration;
+
+                        Color progressBg = musicReady ? Fade(DARKBLUE, 0.20f) : Fade(MAROON, 0.25f);
+                        Color progressFill = musicReady ? Fade(DARKBLUE, 0.70f) : Fade(MAROON, 0.55f);
+                        DrawRectangleRounded(progressRect, 0.45f, 6, progressBg);
+                        if (progressRect.width > 0.0f) {
+                            float ratio = (duration > 0.0f) ? (played / duration) : 0.0f;
+                            if (ratio < 0.0f) ratio = 0.0f;
+                            if (ratio > 1.0f) ratio = 1.0f;
+                            Rectangle fillRect = progressRect;
+                            fillRect.width *= ratio;
+                            if (fillRect.width < 2.0f) {
+                                fillRect.width = 2.0f;
+                            }
+                            DrawRectangleRounded(fillRect, 0.45f, 6, progressFill);
+                        }
+
+                        char timeNow[16] = {0};
+                        char timeTotal[16] = {0};
+                        FormatTimeString(played, timeNow, sizeof(timeNow));
+                        if (duration <= 0.0f) {
+                            snprintf(timeTotal, sizeof(timeTotal), "--:--");
+                        } else {
+                            FormatTimeString(duration, timeTotal, sizeof(timeTotal));
+                        }
+                        int timeFont = 16;
+                        DrawText(timeNow, (int)progressRect.x, (int)progressRect.y - 20, timeFont, Fade(DARKBLUE, 0.85f));
+                        int totalWidth = MeasureText(timeTotal, timeFont);
+                        DrawText(timeTotal, (int)(progressRect.x + progressRect.width - totalWidth), (int)progressRect.y - 20, timeFont, Fade(DARKBLUE, 0.85f));
+
+                        bool playHover = CheckCollisionPointRec(mousePos, playRect);
+                        bool loopHover = CheckCollisionPointRec(mousePos, loopRect);
+
+                        Color playFill;
+                        Color playOutline = Fade(BLACK, 0.35f);
+                        if (!musicReady) {
+                            playFill = Fade(MAROON, playHover ? 0.55f : 0.45f);
+                        } else if (playing) {
+                            playFill = Fade(DARKGREEN, playHover ? 0.75f : 0.60f);
+                        } else {
+                            playFill = Fade(DARKBLUE, playHover ? 0.75f : 0.55f);
+                        }
+                        DrawRectangleRounded(playRect, 0.45f, 6, playFill);
+                        DrawRectangleRoundedLines(playRect, 0.45f, 6, 2.0f, playOutline);
+                        if (!musicReady) {
+                            DrawLine((int)playRect.x + 6, (int)playRect.y + 6, (int)(playRect.x + playRect.width) - 6, (int)(playRect.y + playRect.height) - 6, RAYWHITE);
+                            DrawLine((int)playRect.x + 6, (int)(playRect.y + playRect.height) - 6, (int)(playRect.x + playRect.width) - 6, (int)playRect.y + 6, RAYWHITE);
+                        } else if (playing) {
+                            float pad = 6.0f;
+                            DrawRectangle((int)(playRect.x + pad), (int)(playRect.y + pad), 6, (int)(playRect.height - pad * 2.0f), RAYWHITE);
+                            DrawRectangle((int)(playRect.x + playRect.width - pad - 6.0f), (int)(playRect.y + pad), 6, (int)(playRect.height - pad * 2.0f), RAYWHITE);
+                        } else {
+                            Vector2 p1 = {playRect.x + 8.0f, playRect.y + 6.0f};
+                            Vector2 p2 = {playRect.x + 8.0f, playRect.y + playRect.height - 6.0f};
+                            Vector2 p3 = {playRect.x + playRect.width - 6.0f, playRect.y + playRect.height * 0.5f};
+                            DrawTriangle(p1, p2, p3, RAYWHITE);
+                        }
+
+                        Color loopFill;
+                        if (!musicReady) {
+                            loopFill = Fade(GRAY, loopHover ? 0.5f : 0.4f);
+                        } else if (box->audioLoop) {
+                            loopFill = Fade(DARKGREEN, loopHover ? 0.75f : 0.60f);
+                        } else {
+                            loopFill = Fade(DARKBLUE, loopHover ? 0.65f : 0.45f);
+                        }
+
+                        DrawRectangleRounded(loopRect, 0.45f, 6, loopFill);
+                        DrawRectangleRoundedLines(loopRect, 0.45f, 6, 2.0f, Fade(BLACK, loopHover ? 0.45f : 0.35f));
+
+                        int loopTextWidth = MeasureText("Loop", 16);
+                        float loopTextX = loopRect.x + (loopRect.width - loopTextWidth) * 0.5f;
+                        float loopTextY = loopRect.y + (loopRect.height - 16.0f) * 0.5f;
+                        DrawText("Loop", (int)loopTextX, (int)loopTextY, 16, RAYWHITE);
+
+                        const char* hintText = NULL;
+                        Color hintColor = DARKGRAY;
+                        if (!audioDeviceReady) {
+                            hintText = "Audio disabled";
+                            hintColor = MAROON;
+                        } else if (!musicReady) {
+                            hintText = "Audio failed to load";
+                            hintColor = MAROON;
+                        } else if (playing) {
+                            hintText = "Playing (Space / dbl-click)";
+                            hintColor = DARKGREEN;
+                        } else {
+                            hintText = "Paused (Space / dbl-click)";
+                            hintColor = DARKBLUE;
+                        }
+                        DrawText(hintText, box->x + 16, box->y + box->height - 32, 16, hintColor);
                         if (editingBoxIndex == i) {
                             DrawMultilineTextWithSelection(editingText, box->x + 10, box->y + 10, editingFontSize, textColor, selectionStart, selectionEnd, TEXT_SELECTION_COLOR);
                             DrawTextCursor(box->x, box->y, editingFontSize);
                         } else {
                             DrawMultilineTextWithSelection(box->content.text, box->x + 10, box->y + 10, boxFontSize, textColor, 0, 0, TEXT_SELECTION_COLOR);
-                        }
-                    }
-                    break;
-                case BOX_AUDIO:
-                    {
-                        Rectangle backdrop = {(float)box->x, (float)box->y, (float)box->width, (float)box->height};
-                        DrawRectangleRec(backdrop, Fade(SKYBLUE, 0.25f));
-                        DrawRectangleLines(box->x, box->y, box->width, box->height, Fade(DARKBLUE, 0.4f));
-                        const char* fileName = ExtractFileName(box->filePath);
-                        int titleFont = 20;
-                        int titleWidth = MeasureText(fileName, titleFont);
-                        int titleX = box->x + 16;
-                        if (titleWidth > box->width - 32) {
-                            while (titleFont > 12 && MeasureText(fileName, titleFont) > box->width - 32) {
-                                titleFont -= 2;
-                            }
-                        }
-                        DrawText(fileName, titleX, box->y + 16, titleFont, DARKBLUE);
-
-                        int soundReady = audioDeviceReady && IsSoundReady(box->content.sound);
-                        int playing = soundReady && IsSoundPlaying(box->content.sound);
-                        const char* action = NULL;
-                        int actionFont = 18;
-                        Color actionColor = DARKGRAY;
-
-                        if (!audioDeviceReady) {
-                            action = "Audio disabled (device unavailable)";
-                            actionColor = MAROON;
-                        } else if (!soundReady) {
-                            action = "Audio failed to load";
-                            actionColor = MAROON;
-                        } else if (playing) {
-                            action = "Pause (Space / dbl-click)";
-                            actionColor = DARKGREEN;
-                        } else {
-                            action = "Play (Space / dbl-click)";
-                            actionColor = DARKBLUE;
-                        }
-
-                        DrawText(action, box->x + 16, box->y + box->height - 34, actionFont, actionColor);
-
-                        int iconX = box->x + box->width - 48;
-                        int iconY = box->y + (box->height / 2) - 12;
-                        if (soundReady) {
-                            if (playing) {
-                                DrawRectangle(iconX, iconY, 10, 24, actionColor);
-                                DrawRectangle(iconX + 14, iconY, 10, 24, actionColor);
-                            } else {
-                                Vector2 p1 = {(float)iconX, (float)iconY};
-                                Vector2 p2 = {(float)iconX, (float)(iconY + 24)};
-                                Vector2 p3 = {(float)(iconX + 22), (float)(iconY + 12)};
-                                DrawTriangle(p1, p2, p3, actionColor);
-                            }
-                        } else {
-                            DrawLine(iconX, iconY, iconX + 24, iconY + 24, actionColor);
-                            DrawLine(iconX, iconY + 24, iconX + 24, iconY, actionColor);
                         }
                     }
                     break;
@@ -2629,7 +3018,8 @@ int main(void)
                             titleFont -= 2;
                         }
 
-                        DrawRectangle(box->x, box->y, box->width, 32, Fade(BLACK, 0.35f));
+                        int infoBarHeight = (box->videoConvertSamples > 0u) ? 56 : 32;
+                        DrawRectangle(box->x, box->y, box->width, infoBarHeight, Fade(BLACK, 0.35f));
                         DrawText(fileName, box->x + 16, box->y + 8, titleFont, RAYWHITE);
 
                         int statsFont = 16;
@@ -2643,23 +3033,84 @@ int main(void)
                         }
                         DrawText(frameStats, statsX, box->y + 8, statsFont, statsColor);
 
-                        int paused = WinVideo_IsPaused(box->content.video);
-                        const char* actionLabel = paused ? "Play (Space / dbl-click)" : "Pause (Space / dbl-click)";
-                        DrawRectangle(box->x, box->y + box->height - 34, box->width, 30, Fade(BLACK, 0.3f));
-                        DrawText(actionLabel, box->x + 16, box->y + box->height - 30, 18, RAYWHITE);
-
-                        int iconX = box->x + box->width - 48;
-                        int iconY = box->y + (box->height / 2) - 12;
-                        Color iconColor = paused ? SKYBLUE : GREEN;
-                        if (paused) {
-                            Vector2 p1 = {(float)iconX, (float)iconY};
-                            Vector2 p2 = {(float)iconX, (float)(iconY + 24)};
-                            Vector2 p3 = {(float)(iconX + 22), (float)(iconY + 12)};
-                            DrawTriangle(p1, p2, p3, iconColor);
-                        } else {
-                            DrawRectangle(iconX, iconY, 10, 24, iconColor);
-                            DrawRectangle(iconX + 14, iconY, 10, 24, iconColor);
+                        if (box->videoConvertSamples > 0u) {
+                            float avgMs = box->videoConvertAvgUs / 1000.0f;
+                            float peakMs = box->videoConvertPeakUs / 1000.0f;
+                            unsigned int sampleCount = box->videoConvertSamples;
+                            const char* formatLabel = (box->videoFormatLabel[0] != '\0') ? box->videoFormatLabel : "Unknown";
+                            char convertStats[112];
+                            snprintf(convertStats, sizeof(convertStats), "Convert: %.2f ms avg · %.2f ms peak · %s · n=%u",
+                                     avgMs, peakMs, formatLabel, sampleCount);
+                            int convertFont = 15;
+                            Color convertColor = (box->videoFallbackFrames > 0) ? ORANGE : Fade(RAYWHITE, 0.78f);
+                            DrawText(convertStats, box->x + 16, box->y + 32, convertFont, convertColor);
                         }
+                        Rectangle transportBar = { (float)box->x, (float)box->y + (float)box->height - 68.0f, (float)box->width, 68.0f };
+                        DrawRectangleRec(transportBar, Fade(BLACK, 0.35f));
+
+                        Rectangle playRect = GetVideoPlayButtonRect(box);
+                        Rectangle loopRect = GetVideoLoopButtonRect(box);
+                        Rectangle progressRect = GetVideoProgressRect(box);
+
+                        int paused = WinVideo_IsPaused(box->content.video);
+                        int loopEnabled = box->videoLoop;
+                        double duration = box->videoDurationSeconds;
+                        if (duration < 0.0) duration = 0.0;
+                        double position = box->videoPositionSeconds;
+                        if (position < 0.0) position = 0.0;
+                        if (duration > 0.0 && position > duration) position = duration;
+
+                        DrawRectangleRounded(progressRect, 0.45f, 6, Fade(RAYWHITE, 0.18f));
+                        if (progressRect.width > 0.0f) {
+                            double ratio = (duration > 0.0) ? (position / duration) : 0.0;
+                            if (ratio < 0.0) ratio = 0.0;
+                            if (ratio > 1.0) ratio = 1.0;
+                            Rectangle fillRect = progressRect;
+                            fillRect.width *= (float)ratio;
+                            if (fillRect.width < 2.0f) {
+                                fillRect.width = 2.0f;
+                            }
+                            DrawRectangleRounded(fillRect, 0.45f, 6, Fade(SKYBLUE, 0.8f));
+                        }
+
+                        char timeNow[16] = {0};
+                        char timeTotal[16] = {0};
+                        FormatTimeString(position, timeNow, sizeof(timeNow));
+                        if (duration <= 0.0) {
+                            snprintf(timeTotal, sizeof(timeTotal), "--:--");
+                        } else {
+                            FormatTimeString(duration, timeTotal, sizeof(timeTotal));
+                        }
+                        int timeFont = 18;
+                        DrawText(timeNow, (int)progressRect.x, (int)progressRect.y - 24, timeFont, RAYWHITE);
+                        int totalWidth = MeasureText(timeTotal, timeFont);
+                        DrawText(timeTotal, (int)(progressRect.x + progressRect.width - totalWidth), (int)progressRect.y - 24, timeFont, RAYWHITE);
+
+                        bool playHover = CheckCollisionPointRec(mousePos, playRect);
+                        bool loopHover = CheckCollisionPointRec(mousePos, loopRect);
+
+                        Color playFill = paused ? Fade(SKYBLUE, playHover ? 0.85f : 0.65f) : Fade(GREEN, playHover ? 0.85f : 0.65f);
+                        DrawRectangleRounded(playRect, 0.45f, 8, playFill);
+                        DrawRectangleRoundedLines(playRect, 0.45f, 8, 2.0f, Fade(RAYWHITE, 0.6f));
+                        if (paused) {
+                            Vector2 p1 = {playRect.x + 10.0f, playRect.y + 6.0f};
+                            Vector2 p2 = {playRect.x + 10.0f, playRect.y + playRect.height - 6.0f};
+                            Vector2 p3 = {playRect.x + playRect.width - 8.0f, playRect.y + playRect.height * 0.5f};
+                            DrawTriangle(p1, p2, p3, RAYWHITE);
+                        } else {
+                            float pad = 8.0f;
+                            DrawRectangle((int)(playRect.x + pad), (int)(playRect.y + pad), 8, (int)(playRect.height - pad * 2.0f), RAYWHITE);
+                            DrawRectangle((int)(playRect.x + playRect.width - pad - 8.0f), (int)(playRect.y + pad), 8, (int)(playRect.height - pad * 2.0f), RAYWHITE);
+                        }
+
+                        Color loopFill = loopEnabled ? Fade(DARKGREEN, loopHover ? 0.8f : 0.65f) : Fade(SKYBLUE, loopHover ? 0.7f : 0.5f);
+                        DrawRectangleRounded(loopRect, 0.45f, 8, loopFill);
+                        DrawRectangleRoundedLines(loopRect, 0.45f, 8, 2.0f, Fade(RAYWHITE, 0.6f));
+                        int loopLabelWidth = MeasureText("Loop", 18);
+                        DrawText("Loop", (int)(loopRect.x + (loopRect.width - loopLabelWidth) * 0.5f), (int)(loopRect.y + loopRect.height * 0.5f - 9.0f), 18, RAYWHITE);
+
+                        const char* actionLabel = paused ? "Play (Space / dbl-click)" : "Pause (Space / dbl-click)";
+                        DrawText(actionLabel, box->x + 16, (int)(transportBar.y + transportBar.height - 28), 18, RAYWHITE);
                     }
                     break;
                 case BOX_DRAWING:
@@ -2938,10 +3389,11 @@ void DestroyBox(Box* box) {
             }
             break;
         case BOX_AUDIO:
-            if (audioDeviceReady && IsSoundReady(box->content.sound)) {
-                StopAudioPlayback(box);
-                UnloadSound(box->content.sound);
+            StopAudioPlayback(box);
+            if (audioDeviceReady && IsMusicReady(box->content.music)) {
+                UnloadMusicStream(box->content.music);
             }
+            box->content.music = (Music){0};
             break;
         case BOX_VIDEO:
             if (box->content.video != NULL) {
@@ -2963,6 +3415,11 @@ void DestroyBox(Box* box) {
     box->videoFallbackFrames = 0;
     box->videoReportedDecoded = 0;
     box->videoReportedFallback = 0;
+    box->videoConvertAvgUs = 0.0f;
+    box->videoConvertPeakUs = 0.0f;
+    box->videoConvertLastUs = 0.0f;
+    box->videoConvertSamples = 0u;
+    box->videoFormatLabel[0] = '\0';
 }
 
 int BringBoxToFront(Box* boxes, int boxCount, int index) {
@@ -3116,7 +3573,7 @@ void CaptureSnapshot(CanvasSnapshot* snapshot, Box* boxes, int boxCount, int sel
                 if (src->filePath != NULL) {
                     dest->filePathCopy = strdup(src->filePath);
                 }
-                dest->box.content.sound = (Sound){0};
+                dest->box.content.music = (Music){0};
                 break;
             case BOX_VIDEO:
                 if (src->filePath != NULL) {
@@ -3194,14 +3651,22 @@ void RestoreSnapshotState(Box* boxes, int* boxCount, int* selectedBox, int targe
                 if (src->filePathCopy != NULL) {
                     boxes[i].filePath = strdup(src->filePathCopy);
                 }
-                boxes[i].content.sound = (Sound){0};
+                boxes[i].content.music = (Music){0};
+                boxes[i].audioStreamStarted = 0;
+                boxes[i].audioWasPlaying = 0;
+                boxes[i].audioTimePlayed = 0.0f;
                 if (boxes[i].filePath != NULL && audioDeviceReady) {
-                    Sound restored = LoadSound(boxes[i].filePath);
-                    if (IsSoundReady(restored)) {
-                        boxes[i].content.sound = restored;
+                    Music restored = LoadMusicStream(boxes[i].filePath);
+                    if (IsMusicReady(restored)) {
+                        restored.looping = boxes[i].audioLoop ? 1 : 0;
+                        boxes[i].content.music = restored;
+                        boxes[i].audioDurationSeconds = GetMusicTimeLength(restored);
                     } else {
-                        UnloadSound(restored);
+                        UnloadMusicStream(restored);
+                        boxes[i].audioDurationSeconds = 0.0f;
                     }
+                } else {
+                    boxes[i].audioDurationSeconds = 0.0f;
                 }
                 if (boxes[i].width <= 0) boxes[i].width = AUDIO_BOX_WIDTH;
                 if (boxes[i].height <= 0) boxes[i].height = AUDIO_BOX_HEIGHT;
@@ -3220,6 +3685,17 @@ void RestoreSnapshotState(Box* boxes, int* boxCount, int* selectedBox, int targe
                         boxes[i].videoFallbackFrames = WinVideo_GetFallbackFrameCount(restoredVideo);
                         boxes[i].videoReportedDecoded = 0;
                         boxes[i].videoReportedFallback = 0;
+                        boxes[i].videoConvertAvgUs = 0.0f;
+                        boxes[i].videoConvertPeakUs = 0.0f;
+                        boxes[i].videoConvertLastUs = 0.0f;
+                        boxes[i].videoConvertSamples = 0u;
+                        const char* restoredFormat = WinVideo_GetSampleFormatLabel(restoredVideo);
+                        if (restoredFormat != NULL) {
+                            strncpy(boxes[i].videoFormatLabel, restoredFormat, sizeof(boxes[i].videoFormatLabel) - 1);
+                            boxes[i].videoFormatLabel[sizeof(boxes[i].videoFormatLabel) - 1] = '\0';
+                        } else {
+                            boxes[i].videoFormatLabel[0] = '\0';
+                        }
                         Texture2D* tex = WinVideo_GetTexture(restoredVideo);
                         if (tex != NULL && tex->id != 0) {
                             int texW = tex->width;
@@ -3253,6 +3729,11 @@ void RestoreSnapshotState(Box* boxes, int* boxCount, int* selectedBox, int targe
                     boxes[i].videoFallbackFrames = 0;
                     boxes[i].videoReportedDecoded = 0;
                     boxes[i].videoReportedFallback = 0;
+                    boxes[i].videoConvertAvgUs = 0.0f;
+                    boxes[i].videoConvertPeakUs = 0.0f;
+                    boxes[i].videoConvertLastUs = 0.0f;
+                    boxes[i].videoConvertSamples = 0u;
+                    boxes[i].videoFormatLabel[0] = '\0';
                     const char* fallback = "(Video unavailable)";
                     boxes[i].type = BOX_TEXT;
                     boxes[i].content.text = strdup(fallback);

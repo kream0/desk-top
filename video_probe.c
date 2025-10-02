@@ -42,12 +42,24 @@ int main(int argc, char** argv) {
 
     int decodedFrames = WinVideo_GetDecodedFrameCount(player);
     int fallbackFrames = WinVideo_GetFallbackFrameCount(player);
+    double avgConvertUs = WinVideo_GetConvertCpuAverageMicros(player);
+    double peakConvertUs = WinVideo_GetConvertCpuPeakMicros(player);
+    double lastConvertUs = WinVideo_GetConvertCpuLastMicros(player);
+    unsigned int convertSamples = WinVideo_GetConvertCpuSampleCount(player);
+    const char* formatLabel = WinVideo_GetSampleFormatLabel(player);
     const char* lastErr = WinVideo_GetLastError();
 
     printf("Video probe result\n");
     printf("  Source: %s\n", path);
     printf("  Decoded frames: %d\n", decodedFrames);
     printf("  Fallback frames: %d\n", fallbackFrames);
+    printf("  Convert format: %s\n", (formatLabel != NULL) ? formatLabel : "Unknown");
+    printf("  Convert samples: %u\n", convertSamples);
+    if (convertSamples > 0u) {
+        printf("  Convert avg: %.3f ms\n", avgConvertUs / 1000.0);
+        printf("  Convert peak: %.3f ms\n", peakConvertUs / 1000.0);
+        printf("  Convert last: %.3f ms\n", lastConvertUs / 1000.0);
+    }
     if (lastErr != NULL) {
         printf("  Last error: %s\n", lastErr);
     }

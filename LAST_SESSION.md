@@ -1,5 +1,63 @@
 # Last Session Summary
 
+## Date: October 2, 2025 (transport controls)
+
+### Completed Work
+- Delivered unified transport controls for audio and video boxes, including play/pause buttons, looping toggles, and seekable progress bars with live timecode readouts.
+- Migrated audio playback to streamed `Music` assets so progress tracking stays accurate during scrubbing and looping.
+- Synced Media Foundation player state (duration, position, loop) into the canvas overlay and history snapshots so restores keep playback settings intact.
+- Polished the canvas UI: hover feedback on transport buttons, consistent status messaging, and refined audio loop button drawing to avoid hitbox mismatches.
+
+### Known Issues
+- Transport overlays still rely on polling timers and may drift on very long clips; investigate tighter sync against Media Foundation timecodes.
+- Repeated status toasts can crowd out transport feedback during heavy video diagnostics—consider prioritisation.
+
+### Next Steps
+- Capture longer playback sessions to confirm loop transitions stay seamless across restore/undo flows.
+- Explore adding mute/volume controls and keyboard shortcuts for the new transports.
+
+## Date: October 2, 2025 (profiling)
+
+### Completed Work
+- Instrumented the Media Foundation conversion paths with high-resolution timers so each `WinVideoPlayer` tracks average, peak, and last-frame CPU cost alongside the negotiated sample format.
+- Surfaced the new metrics in the canvas: video boxes now show convert timing overlays and raise a toast the first time real samples arrive, keeping fallback alerts untouched.
+- Extended `video_probe` to dump convert statistics (format, sample count, avg/peak/last ms) for quick CLI profiling.
+- Rebuilt the desktop app and probe with `build.bat` to confirm the new instrumentation compiles cleanly.
+
+### Known Issues
+- Need to exercise the instrumentation against lengthy NV12/YUY2 clips to understand worst-case CPU time; current UI surfaces data but we lack threshold-based alerts.
+- No SIMD optimisations yet—watch for hotspots once profiling data comes in.
+
+### Next Steps
+- Run the probe and desktop app on large planar/interleaved YUV assets, log the reported timings, and decide whether to pursue SIMD or other micro-optimisations.
+- Consider persisting or exporting profiling snapshots for regression tracking if manual sampling proves cumbersome.
+
+## Date: October 2, 2025 (latest)
+
+### Completed Work
+- Added Media Foundation fallbacks for NV12 and YUY2 subtypes, including CPU-side conversions to RGBA so videos stay live when RGB outputs are unavailable.
+- Extended pixel negotiation and stride handling to detect planar formats, fetch real buffer sizes, and gate conversions on positive strides to avoid misaligned reads.
+- Verified the desktop app and `video_probe` continue to build cleanly via `build.bat` after the new conversion paths.
+
+### Known Issues
+- NV12/YUY2 conversion currently assumes positive strides; investigate bottom-up buffers or IMF2DBuffer usage if encountered.
+
+### Next Steps
+- Profile the new YUV conversion paths on large clips and evaluate SIMD opportunities if CPU headroom dips during playback.
+
+## Date: October 2, 2025 (later)
+
+### Completed Work
+- Expanded Media Foundation negotiation to request BGRA32 when available and capture the actual output subtype so each player can configure stride and channel swizzles accurately.
+- Reworked the pixel copy loop to honor the recorded channel order and alpha semantics, only forcing opacity when decoders feed zero alpha so real frames replace the diagnostic gradient on BGRA outputs.
+- Verified `build.bat` so both the desktop app and `video_probe` continue to compile without warnings.
+
+### Known Issues
+- NV12/YUY2 video outputs still fall back to the gradient because we do not yet convert planar or interleaved YUV frames on the CPU.
+
+### Next Steps
+- Prototype a lightweight NV12/YUY2 conversion path and revisit toast prioritisation once the new conversions land.
+
 ## Date: October 2, 2025 (continued)
 
 ### Completed Work

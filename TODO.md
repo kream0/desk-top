@@ -56,7 +56,9 @@
 ## High Priority - Video Stability
 - [x] **Test video texture rendering fix**: Load sample MP4/MOV files and verify textures display correctly (video_probe decoded 61 frames with 0 fallbacks on `video_example.mp4`)
 - [x] Surface decoded/fallback frame counters in the UI so users can see when playback degrades to the gradient pattern
-- [ ] If gradient appears but real video doesn't, investigate Media Foundation pixel format negotiation and BGR-to-RGBA conversion logic
+- [x] If gradient appears but real video doesn't, investigate Media Foundation pixel format negotiation and BGR-to-RGBA conversion logic
+- [x] Teach the video path to convert NV12/YUY2-style outputs so fallback gradients disappear even when MF can't supply RGB.
+- [x] Profile NV12/YUY2 conversions on large clips to ensure CPU usage stays reasonable and consider SIMD optimisations if needed (added on-canvas timing diagnostics and video_probe reporting).
 
 ## Medium Priority - Additional Features
 - [x] Add video content support (load and display video files)
@@ -64,9 +66,9 @@
 - [x] Implement pen drawing tool (freeform drawing)
 - [x] Implement segment/line drawing tool
 - [x] Harden Media Foundation video pipeline with reader fallbacks and detailed load error reporting
-- [ ] Add transport controls for audio/video boxes (play/pause buttons, progress indicator, looping)
-- [ ] Add video playback progress bar with seek support
-- [ ] Display current time and total duration on video boxes
+- [x] Add transport controls for audio/video boxes (play/pause buttons, progress indicator, looping)
+- [x] Add video playback progress bar with seek support
+- [x] Display current time and total duration on video boxes
 - [ ] Match YouTube-style player UX (detailed play/pause, mute, and volume interactions)
 - [ ] Allow scrubbing and hover preview thumbnails for video timeline interaction
 - [ ] Show drop-target affordances when pasting or dragging media files onto the canvas

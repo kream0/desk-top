@@ -18,6 +18,8 @@ void WinVideo_SetPaused(WinVideoPlayer* player, int paused);
 int WinVideo_IsPaused(const WinVideoPlayer* player);
 void WinVideo_Rewind(WinVideoPlayer* player);
 const char* WinVideo_GetLastError(void);
+int WinVideo_GetDecodedFrameCount(const WinVideoPlayer* player);
+int WinVideo_GetFallbackFrameCount(const WinVideoPlayer* player);
 
 #else
 
@@ -36,6 +38,8 @@ static inline void WinVideo_SetPaused(WinVideoPlayer* player, int paused) { (voi
 static inline int WinVideo_IsPaused(const WinVideoPlayer* player) { (void)player; return 1; }
 static inline void WinVideo_Rewind(WinVideoPlayer* player) { (void)player; }
 static inline const char* WinVideo_GetLastError(void) { return "Video playback not supported"; }
+static inline int WinVideo_GetDecodedFrameCount(const WinVideoPlayer* player) { (void)player; return 0; }
+static inline int WinVideo_GetFallbackFrameCount(const WinVideoPlayer* player) { (void)player; return 0; }
 
 #endif
 

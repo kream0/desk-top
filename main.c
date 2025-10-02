@@ -47,6 +47,10 @@ typedef struct {
     int fontSize;
     Color textColor;
     int isSelected;
+    int videoDecodedFrames;
+    int videoFallbackFrames;
+    int videoReportedDecoded;
+    int videoReportedFallback;
 } Box;
 
 typedef enum {
@@ -1313,7 +1317,7 @@ int main(void)
         TraceLog(LOG_WARNING, "Audio device failed to initialize");
     }
 
-    Box boxes[MAX_BOXES];
+    Box boxes[MAX_BOXES] = {0};
     int boxCount = 0;
     int selectedBox = -1;
     Vector2 mousePos, prevMousePos;
@@ -1330,7 +1334,6 @@ int main(void)
     float statusMessageTimer = 0.0f;
     char statusMessage[128] = {0};
     int showClearConfirm = 0;
-    Box dragStartBox = {0};
     int dragBoxValid = 0;
     int dragChanged = 0;
 
@@ -1359,6 +1362,38 @@ int main(void)
         for (int i = 0; i < boxCount; i++) {
             if (boxes[i].type == BOX_VIDEO && boxes[i].content.video != NULL) {
                 WinVideo_Update(boxes[i].content.video, frameDelta);
+            }
+        }
+        for (int i = 0; i < boxCount; i++) {
+            if (boxes[i].type != BOX_VIDEO || boxes[i].content.video == NULL) {
+                continue;
+            }
+
+            int decoded = WinVideo_GetDecodedFrameCount(boxes[i].content.video);
+            int fallback = WinVideo_GetFallbackFrameCount(boxes[i].content.video);
+
+            boxes[i].videoDecodedFrames = decoded;
+            boxes[i].videoFallbackFrames = fallback;
+
+            if (decoded <= 0 && fallback <= 0) {
+                boxes[i].videoReportedDecoded = 0;
+            }
+
+            if (fallback > boxes[i].videoReportedFallback) {
+                const char* fileName = boxes[i].filePath != NULL ? ExtractFileName(boxes[i].filePath) : "(Video)";
+                snprintf(statusMessage, sizeof(statusMessage), "Video fallback: %s • %d decoded / %d fallback", fileName, decoded, fallback);
+                statusMessageTimer = 2.6f;
+                boxes[i].videoReportedFallback = fallback;
+                if (decoded > boxes[i].videoReportedDecoded) {
+                    boxes[i].videoReportedDecoded = decoded;
+                }
+            } else if (fallback == 0 && decoded > 0 && boxes[i].videoReportedDecoded == 0 && statusMessageTimer <= 0.05f) {
+                const char* fileName = boxes[i].filePath != NULL ? ExtractFileName(boxes[i].filePath) : "(Video)";
+                snprintf(statusMessage, sizeof(statusMessage), "Video ready: %s • %d decoded frames", fileName, decoded);
+                statusMessageTimer = 1.8f;
+                boxes[i].videoReportedDecoded = decoded;
+            } else if (decoded > boxes[i].videoReportedDecoded) {
+                boxes[i].videoReportedDecoded = decoded;
             }
         }
 #endif
@@ -1684,7 +1719,6 @@ int main(void)
                             SelectBox(boxes, boxCount, selectedBox);
                             resizeMode = GetResizeModeForPoint(&boxes[selectedBox], mousePos);
                             isDragging = 1;
-                            dragStartBox = boxes[selectedBox];
                             dragBoxValid = 1;
                             dragChanged = 0;
 
@@ -2189,6 +2223,10 @@ int main(void)
                                     boxes[boxCount].fontSize = 0;
                                     boxes[boxCount].textColor = WHITE;
                                     boxes[boxCount].isSelected = 0;
+                                    boxes[boxCount].videoDecodedFrames = WinVideo_GetDecodedFrameCount(player);
+                                    boxes[boxCount].videoFallbackFrames = WinVideo_GetFallbackFrameCount(player);
+                                    boxes[boxCount].videoReportedDecoded = 0;
+                                    boxes[boxCount].videoReportedFallback = 0;
                                     ConfigureVideoBoxSize(&boxes[boxCount], tex);
                                     if (boxes[boxCount].width <= 0) boxes[boxCount].width = DEFAULT_VIDEO_BOX_WIDTH;
                                     if (boxes[boxCount].height <= 0) boxes[boxCount].height = DEFAULT_VIDEO_BOX_HEIGHT;
@@ -2408,6 +2446,10 @@ int main(void)
                                     boxes[boxCount].fontSize = 0;
                                     boxes[boxCount].textColor = WHITE;
                                     boxes[boxCount].isSelected = 0;
+                                    boxes[boxCount].videoDecodedFrames = WinVideo_GetDecodedFrameCount(player);
+                                    boxes[boxCount].videoFallbackFrames = WinVideo_GetFallbackFrameCount(player);
+                                    boxes[boxCount].videoReportedDecoded = 0;
+                                    boxes[boxCount].videoReportedFallback = 0;
                                     ConfigureVideoBoxSize(&boxes[boxCount], tex);
                                     if (boxes[boxCount].width <= 0) boxes[boxCount].width = DEFAULT_VIDEO_BOX_WIDTH;
                                     if (boxes[boxCount].height <= 0) boxes[boxCount].height = DEFAULT_VIDEO_BOX_HEIGHT;
@@ -2589,6 +2631,17 @@ int main(void)
 
                         DrawRectangle(box->x, box->y, box->width, 32, Fade(BLACK, 0.35f));
                         DrawText(fileName, box->x + 16, box->y + 8, titleFont, RAYWHITE);
+
+                        int statsFont = 16;
+                        char frameStats[80];
+                        snprintf(frameStats, sizeof(frameStats), "Frames: %d real · %d fallback", box->videoDecodedFrames, box->videoFallbackFrames);
+                        Color statsColor = (box->videoFallbackFrames > 0) ? ORANGE : Fade(RAYWHITE, 0.85f);
+                        int statsWidth = MeasureText(frameStats, statsFont);
+                        int statsX = box->x + box->width - statsWidth - 16;
+                        if (statsX < box->x + 16) {
+                            statsX = box->x + 16;
+                        }
+                        DrawText(frameStats, statsX, box->y + 8, statsFont, statsColor);
 
                         int paused = WinVideo_IsPaused(box->content.video);
                         const char* actionLabel = paused ? "Play (Space / dbl-click)" : "Pause (Space / dbl-click)";
@@ -2906,6 +2959,10 @@ void DestroyBox(Box* box) {
     }
 
     box->isSelected = 0;
+    box->videoDecodedFrames = 0;
+    box->videoFallbackFrames = 0;
+    box->videoReportedDecoded = 0;
+    box->videoReportedFallback = 0;
 }
 
 int BringBoxToFront(Box* boxes, int boxCount, int index) {
@@ -3159,6 +3216,10 @@ void RestoreSnapshotState(Box* boxes, int* boxCount, int* selectedBox, int targe
                     WinVideoPlayer* restoredVideo = WinVideo_Load(boxes[i].filePath);
                     if (restoredVideo != NULL) {
                         boxes[i].content.video = restoredVideo;
+                        boxes[i].videoDecodedFrames = WinVideo_GetDecodedFrameCount(restoredVideo);
+                        boxes[i].videoFallbackFrames = WinVideo_GetFallbackFrameCount(restoredVideo);
+                        boxes[i].videoReportedDecoded = 0;
+                        boxes[i].videoReportedFallback = 0;
                         Texture2D* tex = WinVideo_GetTexture(restoredVideo);
                         if (tex != NULL && tex->id != 0) {
                             int texW = tex->width;
@@ -3188,6 +3249,10 @@ void RestoreSnapshotState(Box* boxes, int* boxCount, int* selectedBox, int targe
                         free(boxes[i].filePath);
                         boxes[i].filePath = NULL;
                     }
+                    boxes[i].videoDecodedFrames = 0;
+                    boxes[i].videoFallbackFrames = 0;
+                    boxes[i].videoReportedDecoded = 0;
+                    boxes[i].videoReportedFallback = 0;
                     const char* fallback = "(Video unavailable)";
                     boxes[i].type = BOX_TEXT;
                     boxes[i].content.text = strdup(fallback);

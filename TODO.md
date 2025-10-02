@@ -54,7 +54,8 @@
 - [x] Highlight active text edits with dedicated focus outline and caret styling
 
 ## High Priority - Video Stability
-- [ ] **Test video texture rendering fix**: Load sample MP4/MOV files and verify textures display correctly (check for gradient pattern, working video, or "Loading..." state)
+- [x] **Test video texture rendering fix**: Load sample MP4/MOV files and verify textures display correctly (video_probe decoded 61 frames with 0 fallbacks on `video_example.mp4`)
+- [x] Surface decoded/fallback frame counters in the UI so users can see when playback degrades to the gradient pattern
 - [ ] If gradient appears but real video doesn't, investigate Media Foundation pixel format negotiation and BGR-to-RGBA conversion logic
 
 ## Medium Priority - Additional Features
@@ -64,8 +65,12 @@
 - [x] Implement segment/line drawing tool
 - [x] Harden Media Foundation video pipeline with reader fallbacks and detailed load error reporting
 - [ ] Add transport controls for audio/video boxes (play/pause buttons, progress indicator, looping)
+- [ ] Add video playback progress bar with seek support
+- [ ] Display current time and total duration on video boxes
+- [ ] Match YouTube-style player UX (detailed play/pause, mute, and volume interactions)
 - [ ] Allow scrubbing and hover preview thumbnails for video timeline interaction
 - [ ] Show drop-target affordances when pasting or dragging media files onto the canvas
+- [ ] Automate the new `video_probe` diagnostic in CI or nightly checks once a portable testing flow exists
 - [ ] Re-test Media Foundation video pasting on Windows (try sample `.mp4`/`.mov` files) after the stride/padding fix and capture the status toast if it still falls back to text (error toasts now include MF HRESULT details)
 - [ ] Evaluate FFmpeg (or similar) fallback for video decoding when Media Foundation is unavailable or lacks codecs
 

@@ -56,6 +56,8 @@ struct WinVideoPlayer {
     int bytesPerPixel;
     LONG stride;
     int endOfStream;
+    int decodedFrameCount;
+    int fallbackFrameCount;
 };
 
 static int gVideoInitialized = 0;
@@ -490,6 +492,8 @@ WinVideoPlayer* WinVideo_Load(const char* filePath) {
     player->ready = 0;
     player->endOfStream = 0;
     player->bytesPerPixel = sourceBytesPerPixel;
+    player->decodedFrameCount = 0;
+    player->fallbackFrameCount = 0;
 
     if (player->pixels == NULL) {
         WinVideo_SetLastError(E_OUTOFMEMORY, "Pixel buffer allocation");
@@ -528,6 +532,7 @@ WinVideoPlayer* WinVideo_Load(const char* filePath) {
         }
         UpdateTexture(player->texture, player->pixels);
         player->ready = 1;
+        player->fallbackFrameCount += 1;
     }
 
     return player;
@@ -610,6 +615,7 @@ static int WinVideo_ReadFrame(WinVideoPlayer* player) {
     ID3D11Texture2D* stagingTexture = NULL;
     D3D11_MAPPED_SUBRESOURCE mapped = {0};
     int useDxgiPath = 0;
+    int hadSampleData = 0;
 
     hr = IMFSample_ConvertToContiguousBuffer(sample, &buffer);
     if (FAILED(hr)) {
@@ -698,7 +704,7 @@ static int WinVideo_ReadFrame(WinVideoPlayer* player) {
         if (stepX <= 0.0f) stepX = 1.0f;
         if (stepY <= 0.0f) stepY = 1.0f;
 
-        int touched = 0;
+    int touched = 0;
         int useDirectCopy = (decodeWidth == destWidth && decodeHeight == destHeight &&
                               fabsf(stepX - 1.0f) < 0.0005f && fabsf(stepY - 1.0f) < 0.0005f);
 
@@ -751,6 +757,8 @@ static int WinVideo_ReadFrame(WinVideoPlayer* player) {
                 continue;
             }
 
+            hadSampleData = 1;
+
             if (useDirectCopy) {
                 int pixelsToCopy = destWidth;
                 if (pixelsToCopy > maxSrcPixels) {
@@ -762,7 +770,7 @@ static int WinVideo_ReadFrame(WinVideoPlayer* player) {
                     dstPx[0] = srcPx[2];
                     dstPx[1] = srcPx[1];
                     dstPx[2] = srcPx[0];
-                    dstPx[3] = (sourceBytes >= 4) ? srcPx[3] : 255;
+                    dstPx[3] = 255;
                     srcPx += sourceBytes;
                     dstPx += 4;
                 }
@@ -782,7 +790,7 @@ static int WinVideo_ReadFrame(WinVideoPlayer* player) {
                     dstPx[0] = srcPx[2];
                     dstPx[1] = srcPx[1];
                     dstPx[2] = srcPx[0];
-                    dstPx[3] = (sourceBytes >= 4) ? srcPx[3] : 255;
+                    dstPx[3] = 255;
 
                     srcXPos += stepX;
                 }
@@ -795,6 +803,11 @@ static int WinVideo_ReadFrame(WinVideoPlayer* player) {
         if (touched && player->pixels != NULL && player->texture.id != 0) {
             UpdateTexture(player->texture, player->pixels);
             player->ready = 1;
+            if (hadSampleData) {
+                player->decodedFrameCount += 1;
+            } else {
+                player->fallbackFrameCount += 1;
+            }
         }
         if (!useDxgiPath) {
             IMFMediaBuffer_Unlock(buffer);
@@ -883,6 +896,14 @@ void WinVideo_Rewind(WinVideoPlayer* player) {
     }
     WinVideo_ResetToStart(player);
     WinVideo_ReadFrame(player);
+}
+
+int WinVideo_GetDecodedFrameCount(const WinVideoPlayer* player) {
+    return (player != NULL) ? player->decodedFrameCount : 0;
+}
+
+int WinVideo_GetFallbackFrameCount(const WinVideoPlayer* player) {
+    return (player != NULL) ? player->fallbackFrameCount : 0;
 }
 
 #else

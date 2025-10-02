@@ -1,5 +1,34 @@
 # Last Session Summary
 
+## Date: October 2, 2025 (continued)
+
+### Completed Work
+- Forced every decoded frame to render opaque so Media Foundation outputs that leave alpha at zero no longer disappear despite rising frame counters.
+- Surfaced Media Foundation decode diagnostics in the UI: video boxes now cache decoded and fallback frame counts, render them inline, and raise status toasts whenever fallback frames appear or the first real frame arrives.
+- Wired the new counters through the main loop so the status bar messaging reflects live playback health, making the gradient fallback easy to spot without running `video_probe`.
+- Ensured all video box creation/restore paths initialize the counters correctly and validated the build via `build.bat`.
+
+### Known Issues
+- Toasts pre-empt other status messages when fallback frames spike; may need prioritisation once more diagnostics land.
+
+### Next Steps
+- Keep an eye on pixel-format negotiation when fallback persists so we can triage the Media Foundation conversion path next.
+
+## Date: October 2, 2025
+
+### Completed Work
+- Added decode and fallback frame counters to the Windows video pipeline so diagnostics can distinguish real frames from gradient fallbacks.
+- Created a headless `video_probe` diagnostic that loads a video via `WinVideo`, advances playback, and reports decoded versus fallback frame counts.
+- Extended both the `Makefile` and `build.bat` to compile the new probe alongside the main desktop application.
+- Ran the probe against `video_example.mp4`; it decoded 61 frames with zero fallbacks, confirming that the recent Media Foundation fixes render real textures on this sample.
+
+### Known Issues
+- GNU Make is not installed in the current environment, so the Windows `build.bat` script is required for local builds until tooling improves.
+
+### Next Steps
+- Feed the decoded/fallback counters into status toasts so end users can see when a video falls back to the diagnostic gradient.
+- Consider wiring the probe into automated regression checks once a portable testing story is in place.
+
 ## Date: October 1, 2025 (continued)
 
 ### Completed Work

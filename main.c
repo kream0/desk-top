@@ -8,6 +8,7 @@
 
 #ifdef _WIN32
 #include "win_clipboard.h"
+#include "win_video.h"
 #endif
 
 #define MAX_BOXES 100
@@ -40,6 +41,7 @@ typedef struct {
         Texture2D texture;
         char* text;
         Sound sound;
+        WinVideoPlayer* video;
     } content;
     char* filePath;
     int fontSize;
@@ -67,6 +69,10 @@ static const float TOOLBAR_PADDING = 10.0f;
 static const float STROKE_THICKNESS = 4.0f;
 static const int AUDIO_BOX_WIDTH = 260;
 static const int AUDIO_BOX_HEIGHT = 96;
+static const int DEFAULT_VIDEO_BOX_WIDTH = 320;
+static const int DEFAULT_VIDEO_BOX_HEIGHT = 180;
+static const float MAX_VIDEO_BOX_WIDTH = 640.0f;
+static const float MAX_VIDEO_BOX_HEIGHT = 480.0f;
 static const float BUTTON_ROUNDNESS = 0.25f;
 static const float STATUS_BAR_HEIGHT = 32.0f;
 static const char* STATUS_DEFAULT_HINT = "Tip: Double-click to edit text • Ctrl+V pastes media";
@@ -123,6 +129,8 @@ void ResetEditingState(void);
 int ColorsEqual(Color a, Color b);
 int CopyImageToClipboard(const Image* image);
 void HandleTextInput(Box* boxes, char* statusMessage, size_t statusMessageSize, float* statusMessageTimer);
+void ConfigureVideoBoxSize(Box* box, const Texture2D* texture);
+void ToggleVideoPlayback(Box* box, char* statusMessage, size_t statusMessageSize, float* statusMessageTimer);
 
 typedef struct {
     Box box;
@@ -351,6 +359,55 @@ static void ToggleAudioPlayback(Box* box, char* statusMessage, size_t statusMess
             snprintf(statusMessage, statusMessageSize, "Playing %s", ExtractFileName(box->filePath));
             *statusMessageTimer = 1.4f;
         }
+    }
+}
+
+void ConfigureVideoBoxSize(Box* box, const Texture2D* texture) {
+    if (box == NULL) {
+        return;
+    }
+
+    int texW = DEFAULT_VIDEO_BOX_WIDTH;
+    int texH = DEFAULT_VIDEO_BOX_HEIGHT;
+
+    if (texture != NULL && texture->id != 0) {
+        texW = texture->width > 0 ? texture->width : DEFAULT_VIDEO_BOX_WIDTH;
+        texH = texture->height > 0 ? texture->height : DEFAULT_VIDEO_BOX_HEIGHT;
+    }
+
+    float scale = 1.0f;
+    if (texW > MAX_VIDEO_BOX_WIDTH || texH > MAX_VIDEO_BOX_HEIGHT) {
+        float scaleW = MAX_VIDEO_BOX_WIDTH / (float)texW;
+        float scaleH = MAX_VIDEO_BOX_HEIGHT / (float)texH;
+        scale = (scaleW < scaleH) ? scaleW : scaleH;
+    }
+
+    int newWidth = (int)((float)texW * scale);
+    int newHeight = (int)((float)texH * scale);
+
+    if (newWidth <= 0) newWidth = DEFAULT_VIDEO_BOX_WIDTH;
+    if (newHeight <= 0) newHeight = DEFAULT_VIDEO_BOX_HEIGHT;
+
+    box->width = newWidth;
+    box->height = newHeight;
+}
+
+void ToggleVideoPlayback(Box* box, char* statusMessage, size_t statusMessageSize, float* statusMessageTimer) {
+    if (box == NULL || box->type != BOX_VIDEO || box->content.video == NULL) {
+        return;
+    }
+
+    int paused = WinVideo_IsPaused(box->content.video);
+    WinVideo_SetPaused(box->content.video, paused ? 0 : 1);
+
+    if (statusMessage != NULL && statusMessageSize > 0 && statusMessageTimer != NULL) {
+        const char* fileName = ExtractFileName(box->filePath);
+        if (paused) {
+            snprintf(statusMessage, statusMessageSize, "Playing %s", fileName);
+        } else {
+            snprintf(statusMessage, statusMessageSize, "Paused %s", fileName);
+        }
+        *statusMessageTimer = 1.6f;
     }
 }
 
@@ -1297,6 +1354,14 @@ int main(void)
     while (!WindowShouldClose())
     {
         mousePos = GetMousePosition();
+        float frameDelta = GetFrameTime();
+#ifdef _WIN32
+        for (int i = 0; i < boxCount; i++) {
+            if (boxes[i].type == BOX_VIDEO && boxes[i].content.video != NULL) {
+                WinVideo_Update(boxes[i].content.video, frameDelta);
+            }
+        }
+#endif
         int ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
         int shiftDown = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
 
@@ -1558,6 +1623,8 @@ int main(void)
                                         StartTextEdit(clickedBox, boxes);
                                     } else if (boxes[clickedBox].type == BOX_AUDIO) {
                                         ToggleAudioPlayback(&boxes[clickedBox], statusMessage, sizeof(statusMessage), &statusMessageTimer);
+                                    } else if (boxes[clickedBox].type == BOX_VIDEO) {
+                                        ToggleVideoPlayback(&boxes[clickedBox], statusMessage, sizeof(statusMessage), &statusMessageTimer);
                                     } else if (boxCount < MAX_BOXES) {
                                         int textWidth, textHeight;
                                         const char* newText = "New text";
@@ -2011,8 +2078,12 @@ int main(void)
                 }
             }
 
-            if (selectedBox != -1 && boxes[selectedBox].type == BOX_AUDIO && IsKeyPressed(KEY_SPACE)) {
-                ToggleAudioPlayback(&boxes[selectedBox], statusMessage, sizeof(statusMessage), &statusMessageTimer);
+            if (selectedBox != -1 && IsKeyPressed(KEY_SPACE)) {
+                if (boxes[selectedBox].type == BOX_AUDIO) {
+                    ToggleAudioPlayback(&boxes[selectedBox], statusMessage, sizeof(statusMessage), &statusMessageTimer);
+                } else if (boxes[selectedBox].type == BOX_VIDEO) {
+                    ToggleVideoPlayback(&boxes[selectedBox], statusMessage, sizeof(statusMessage), &statusMessageTimer);
+                }
             }
         }
 
@@ -2099,6 +2170,51 @@ int main(void)
                                 } else {
                                     snprintf(statusMessage, sizeof(statusMessage), "Audio placeholder: failed to load %s", audioName);
                                     statusMessageTimer = 2.0f;
+                                }
+                            }
+                        } else if (ext != NULL && (EqualsIgnoreCase(ext, ".mp4") || EqualsIgnoreCase(ext, ".mov") ||
+                                                     EqualsIgnoreCase(ext, ".avi") || EqualsIgnoreCase(ext, ".mkv") ||
+                                                     EqualsIgnoreCase(ext, ".webm") || EqualsIgnoreCase(ext, ".wmv") ||
+                                                     EqualsIgnoreCase(ext, ".mpg") || EqualsIgnoreCase(ext, ".mpeg"))) {
+                            char* storedPath = strdup(filePath);
+                            if (storedPath != NULL) {
+                                WinVideoPlayer* player = WinVideo_Load(filePath);
+                                if (player != NULL) {
+                                    Texture2D* tex = WinVideo_GetTexture(player);
+                                    boxes[boxCount].x = baseX;
+                                    boxes[boxCount].y = baseY;
+                                    boxes[boxCount].type = BOX_VIDEO;
+                                    boxes[boxCount].content.video = player;
+                                    boxes[boxCount].filePath = storedPath;
+                                    boxes[boxCount].fontSize = 0;
+                                    boxes[boxCount].textColor = WHITE;
+                                    boxes[boxCount].isSelected = 0;
+                                    ConfigureVideoBoxSize(&boxes[boxCount], tex);
+                                    if (boxes[boxCount].width <= 0) boxes[boxCount].width = DEFAULT_VIDEO_BOX_WIDTH;
+                                    if (boxes[boxCount].height <= 0) boxes[boxCount].height = DEFAULT_VIDEO_BOX_HEIGHT;
+                                    boxCount++;
+                                    selectedBox = boxCount - 1;
+                                    SelectBox(boxes, boxCount, selectedBox);
+                                    PushHistoryState(boxes, boxCount, selectedBox);
+                                    created = 1;
+
+                                    const char* videoName = ExtractFileName(storedPath);
+                                    if (tex != NULL && tex->id != 0) {
+                                        snprintf(statusMessage, sizeof(statusMessage), "Video loaded: %s (%dx%d)", videoName, tex->width, tex->height);
+                                    } else {
+                                        snprintf(statusMessage, sizeof(statusMessage), "Video loaded: %s", videoName);
+                                    }
+                                    statusMessageTimer = 1.8f;
+                                } else {
+                                    const char* videoName = ExtractFileName(storedPath);
+                                    const char* detail = WinVideo_GetLastError();
+                                    if (detail != NULL && detail[0] != '\0') {
+                                        snprintf(statusMessage, sizeof(statusMessage), "Video failed to load: %s (%s)", videoName, detail);
+                                    } else {
+                                        snprintf(statusMessage, sizeof(statusMessage), "Video failed to load: %s", videoName);
+                                    }
+                                    statusMessageTimer = 2.2f;
+                                    free(storedPath);
                                 }
                             }
                         }
@@ -2277,6 +2393,49 @@ int main(void)
                                     snprintf(statusMessage, sizeof(statusMessage), "Audio placeholder: failed to load %s", audioName);
                                     statusMessageTimer = 2.0f;
                                 }
+                            } else if (EqualsIgnoreCase(ext, ".mp4") || EqualsIgnoreCase(ext, ".mov") ||
+                                       EqualsIgnoreCase(ext, ".avi") || EqualsIgnoreCase(ext, ".mkv") ||
+                                       EqualsIgnoreCase(ext, ".webm") || EqualsIgnoreCase(ext, ".wmv") ||
+                                       EqualsIgnoreCase(ext, ".mpg") || EqualsIgnoreCase(ext, ".mpeg")) {
+                                WinVideoPlayer* player = WinVideo_Load(path);
+                                if (player != NULL) {
+                                    Texture2D* tex = WinVideo_GetTexture(player);
+                                    boxes[boxCount].x = (int)mousePos.x;
+                                    boxes[boxCount].y = (int)mousePos.y;
+                                    boxes[boxCount].type = BOX_VIDEO;
+                                    boxes[boxCount].content.video = player;
+                                    boxes[boxCount].filePath = path;
+                                    boxes[boxCount].fontSize = 0;
+                                    boxes[boxCount].textColor = WHITE;
+                                    boxes[boxCount].isSelected = 0;
+                                    ConfigureVideoBoxSize(&boxes[boxCount], tex);
+                                    if (boxes[boxCount].width <= 0) boxes[boxCount].width = DEFAULT_VIDEO_BOX_WIDTH;
+                                    if (boxes[boxCount].height <= 0) boxes[boxCount].height = DEFAULT_VIDEO_BOX_HEIGHT;
+                                    boxCount++;
+                                    handled = 1;
+                                    selectedBox = boxCount - 1;
+                                    SelectBox(boxes, boxCount, selectedBox);
+                                    PushHistoryState(boxes, boxCount, selectedBox);
+
+                                    const char* videoName = ExtractFileName(path);
+                                    if (tex != NULL && tex->id != 0) {
+                                        snprintf(statusMessage, sizeof(statusMessage), "Video loaded: %s (%dx%d)", videoName, tex->width, tex->height);
+                                    } else {
+                                        snprintf(statusMessage, sizeof(statusMessage), "Video loaded: %s", videoName);
+                                    }
+                                    statusMessageTimer = 1.8f;
+                                    path = NULL;
+                                }
+                                else {
+                                    const char* videoName = ExtractFileName(path);
+                                    const char* detail = WinVideo_GetLastError();
+                                    if (detail != NULL && detail[0] != '\0') {
+                                        snprintf(statusMessage, sizeof(statusMessage), "Video failed to load: %s (%s)", videoName, detail);
+                                    } else {
+                                        snprintf(statusMessage, sizeof(statusMessage), "Video failed to load: %s", videoName);
+                                    }
+                                    statusMessageTimer = 2.2f;
+                                }
                             }
                         }
                     }
@@ -2307,7 +2466,7 @@ int main(void)
                                 free(path);
                             }
                         }
-                    } else if (path && boxes[selectedBox].type != BOX_AUDIO) {
+                    } else if (path && boxes[selectedBox].type != BOX_AUDIO && boxes[selectedBox].type != BOX_VIDEO) {
                         free(path);
                     }
                 }
@@ -2404,6 +2563,52 @@ int main(void)
                         }
                     }
                     break;
+                case BOX_VIDEO:
+                    {
+                        Rectangle dest = {(float)box->x, (float)box->y, (float)box->width, (float)box->height};
+                        DrawRectangleRec(dest, Fade(BLACK, 0.15f));
+                        DrawRectangleLines(box->x, box->y, box->width, box->height, Fade(DARKBLUE, 0.45f));
+
+                        Texture2D* tex = WinVideo_GetTexture(box->content.video);
+                        if (tex != NULL && tex->id != 0 && WinVideo_IsReady(box->content.video)) {
+                            Rectangle source = {0.0f, 0.0f, (float)tex->width, (float)tex->height};
+                            DrawTexturePro(*tex, source, dest, (Vector2){0.0f, 0.0f}, 0.0f, WHITE);
+                        } else {
+                            DrawRectangleLinesEx(dest, 2.0f, Fade(WHITE, 0.2f));
+                            DrawText("Loading video...", box->x + 16, box->y + (box->height / 2) - 12, 20, LIGHTGRAY);
+                        }
+
+                        const char* fileName = ExtractFileName(box->filePath);
+                        if (fileName == NULL || fileName[0] == '\0') {
+                            fileName = "(Video)";
+                        }
+                        int titleFont = 20;
+                        while (titleFont > 12 && MeasureText(fileName, titleFont) > box->width - 32) {
+                            titleFont -= 2;
+                        }
+
+                        DrawRectangle(box->x, box->y, box->width, 32, Fade(BLACK, 0.35f));
+                        DrawText(fileName, box->x + 16, box->y + 8, titleFont, RAYWHITE);
+
+                        int paused = WinVideo_IsPaused(box->content.video);
+                        const char* actionLabel = paused ? "Play (Space / dbl-click)" : "Pause (Space / dbl-click)";
+                        DrawRectangle(box->x, box->y + box->height - 34, box->width, 30, Fade(BLACK, 0.3f));
+                        DrawText(actionLabel, box->x + 16, box->y + box->height - 30, 18, RAYWHITE);
+
+                        int iconX = box->x + box->width - 48;
+                        int iconY = box->y + (box->height / 2) - 12;
+                        Color iconColor = paused ? SKYBLUE : GREEN;
+                        if (paused) {
+                            Vector2 p1 = {(float)iconX, (float)iconY};
+                            Vector2 p2 = {(float)iconX, (float)(iconY + 24)};
+                            Vector2 p3 = {(float)(iconX + 22), (float)(iconY + 12)};
+                            DrawTriangle(p1, p2, p3, iconColor);
+                        } else {
+                            DrawRectangle(iconX, iconY, 10, 24, iconColor);
+                            DrawRectangle(iconX + 14, iconY, 10, 24, iconColor);
+                        }
+                    }
+                    break;
                 case BOX_DRAWING:
                     {
                         Rectangle source = {0.0f, 0.0f, (float)box->content.texture.width, -(float)box->content.texture.height};
@@ -2439,7 +2644,7 @@ int main(void)
 
                 DrawRectangleLinesEx(selectionRect, 2.0f, borderColor);
 
-                if (box->type == BOX_TEXT || box->type == BOX_IMAGE || box->type == BOX_AUDIO) {
+                if (box->type == BOX_TEXT || box->type == BOX_IMAGE || box->type == BOX_AUDIO || box->type == BOX_VIDEO) {
                     DrawResizeHandles(box);
                 }
             }
@@ -2653,6 +2858,7 @@ int main(void)
         FreeSnapshot(&historyStates[i]);
     }
 
+    WinVideo_GlobalShutdown();
     CloseAudioDevice();
     CloseWindow();
 
@@ -2682,6 +2888,12 @@ void DestroyBox(Box* box) {
             if (audioDeviceReady && IsSoundReady(box->content.sound)) {
                 StopAudioPlayback(box);
                 UnloadSound(box->content.sound);
+            }
+            break;
+        case BOX_VIDEO:
+            if (box->content.video != NULL) {
+                WinVideo_Unload(box->content.video);
+                box->content.video = NULL;
             }
             break;
         default:
@@ -2849,6 +3061,12 @@ void CaptureSnapshot(CanvasSnapshot* snapshot, Box* boxes, int boxCount, int sel
                 }
                 dest->box.content.sound = (Sound){0};
                 break;
+            case BOX_VIDEO:
+                if (src->filePath != NULL) {
+                    dest->filePathCopy = strdup(src->filePath);
+                }
+                dest->box.content.video = NULL;
+                break;
             default:
                 break;
         }
@@ -2930,6 +3148,53 @@ void RestoreSnapshotState(Box* boxes, int* boxCount, int* selectedBox, int targe
                 }
                 if (boxes[i].width <= 0) boxes[i].width = AUDIO_BOX_WIDTH;
                 if (boxes[i].height <= 0) boxes[i].height = AUDIO_BOX_HEIGHT;
+                break;
+            case BOX_VIDEO:
+                boxes[i].content.video = NULL;
+                if (src->filePathCopy != NULL) {
+                    boxes[i].filePath = strdup(src->filePathCopy);
+                }
+#ifdef _WIN32
+                if (boxes[i].filePath != NULL) {
+                    WinVideoPlayer* restoredVideo = WinVideo_Load(boxes[i].filePath);
+                    if (restoredVideo != NULL) {
+                        boxes[i].content.video = restoredVideo;
+                        Texture2D* tex = WinVideo_GetTexture(restoredVideo);
+                        if (tex != NULL && tex->id != 0) {
+                            int texW = tex->width;
+                            int texH = tex->height;
+                            if (texW <= 0 || texH <= 0) {
+                                texW = 320;
+                                texH = 180;
+                            }
+                            const float maxW = 640.0f;
+                            const float maxH = 480.0f;
+                            float scale = 1.0f;
+                            if (texW > maxW || texH > maxH) {
+                                float scaleW = maxW / (float)texW;
+                                float scaleH = maxH / (float)texH;
+                                scale = (scaleW < scaleH) ? scaleW : scaleH;
+                            }
+                            boxes[i].width = (int)((float)texW * scale);
+                            boxes[i].height = (int)((float)texH * scale);
+                            if (boxes[i].width <= 0) boxes[i].width = texW;
+                            if (boxes[i].height <= 0) boxes[i].height = texH;
+                        }
+                    }
+                }
+#endif
+                if (boxes[i].content.video == NULL) {
+                    if (boxes[i].filePath != NULL) {
+                        free(boxes[i].filePath);
+                        boxes[i].filePath = NULL;
+                    }
+                    const char* fallback = "(Video unavailable)";
+                    boxes[i].type = BOX_TEXT;
+                    boxes[i].content.text = strdup(fallback);
+                    boxes[i].fontSize = DEFAULT_FONT_SIZE;
+                    boxes[i].textColor = BLACK;
+                    CalculateTextBoxSize(fallback, boxes[i].fontSize, &boxes[i].width, &boxes[i].height);
+                }
                 break;
             default:
                 break;

@@ -53,11 +53,21 @@
 - [x] Add per-text-box font sizing controls (Ctrl +/−/0) with live auto-resize
 - [x] Highlight active text edits with dedicated focus outline and caret styling
 
+## High Priority - Video Stability
+- [ ] **Test video texture rendering fix**: Load sample MP4/MOV files and verify textures display correctly (check for gradient pattern, working video, or "Loading..." state)
+- [ ] If gradient appears but real video doesn't, investigate Media Foundation pixel format negotiation and BGR-to-RGBA conversion logic
+
 ## Medium Priority - Additional Features
-- [ ] Add video content support (load and display video files)
+- [x] Add video content support (load and display video files)
 - [x] Add audio content support (load and play audio files)
 - [x] Implement pen drawing tool (freeform drawing)
 - [x] Implement segment/line drawing tool
+- [x] Harden Media Foundation video pipeline with reader fallbacks and detailed load error reporting
+- [ ] Add transport controls for audio/video boxes (play/pause buttons, progress indicator, looping)
+- [ ] Allow scrubbing and hover preview thumbnails for video timeline interaction
+- [ ] Show drop-target affordances when pasting or dragging media files onto the canvas
+- [ ] Re-test Media Foundation video pasting on Windows (try sample `.mp4`/`.mov` files) after the stride/padding fix and capture the status toast if it still falls back to text (error toasts now include MF HRESULT details)
+- [ ] Evaluate FFmpeg (or similar) fallback for video decoding when Media Foundation is unavailable or lacks codecs
 
 ## Medium Priority - Selection Enhancements
 - [ ] Implement marquee "box" selection by dragging on the canvas
@@ -76,3 +86,5 @@
 - [ ] Add bounds checking for box operations
 - [ ] Implement proper cleanup on application exit
 - [ ] Add configuration file support
+- [ ] Re-profile large (~53MB) MP4 ingests after the decode scaling/frame throttling work; capture CPU/RAM metrics and iterate if spikes persist
+- [ ] Validate on-device that downsampled video textures render correctly (no blank frames) and adjust sampling if artifacts appear

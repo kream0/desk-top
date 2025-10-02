@@ -237,36 +237,18 @@ int WinClip_SetImageRGBA(const unsigned char* data, int width, int height) {
     }
 
     int rowStride = width * 4;
-    int imageDataSize = rowStride * height;
-    SIZE_T dibSize = sizeof(BITMAPINFOHEADER) + imageDataSize;
+    SIZE_T pixelDataSize = (SIZE_T)rowStride * (SIZE_T)height;
 
-    HGLOBAL hMem = GlobalAlloc(GHND, dibSize);
-    if (hMem == NULL) {
+    unsigned char* bgra = (unsigned char*)malloc(pixelDataSize);
+    if (bgra == NULL) {
         CloseClipboard();
         return 0;
     }
 
-    BITMAPINFOHEADER* header = (BITMAPINFOHEADER*)GlobalLock(hMem);
-    if (header == NULL) {
-        GlobalFree(hMem);
-        CloseClipboard();
-        return 0;
-    }
-
-    memset(header, 0, sizeof(BITMAPINFOHEADER));
-    header->biSize = sizeof(BITMAPINFOHEADER);
-    header->biWidth = width;
-    header->biHeight = -height; /* negative for top-down DIB */
-    header->biPlanes = 1;
-    header->biBitCount = 32;
-    header->biCompression = BI_RGB;
-    header->biSizeImage = imageDataSize;
-
-    unsigned char* dest = (unsigned char*)(header + 1);
-    for (int y = 0; y < height; y++) {
-        const unsigned char* srcRow = data + y * rowStride;
-        unsigned char* dstRow = dest + y * rowStride;
-        for (int x = 0; x < width; x++) {
+    for (int y = 0; y < height; ++y) {
+        const unsigned char* srcRow = data + (SIZE_T)y * (SIZE_T)rowStride;
+        unsigned char* dstRow = bgra + (SIZE_T)y * (SIZE_T)rowStride;
+        for (int x = 0; x < width; ++x) {
             dstRow[x * 4 + 0] = srcRow[x * 4 + 2]; /* B */
             dstRow[x * 4 + 1] = srcRow[x * 4 + 1]; /* G */
             dstRow[x * 4 + 2] = srcRow[x * 4 + 0]; /* R */
@@ -274,16 +256,124 @@ int WinClip_SetImageRGBA(const unsigned char* data, int width, int height) {
         }
     }
 
-    GlobalUnlock(hMem);
-
-    if (SetClipboardData(CF_DIB, hMem) == NULL) {
-        GlobalFree(hMem);
+    SIZE_T dibSize = sizeof(BITMAPINFOHEADER) + pixelDataSize;
+    HGLOBAL hDib = GlobalAlloc(GHND, dibSize);
+    if (hDib == NULL) {
+        free(bgra);
         CloseClipboard();
         return 0;
     }
 
+    BITMAPINFOHEADER* dibHeader = (BITMAPINFOHEADER*)GlobalLock(hDib);
+    if (dibHeader == NULL) {
+        GlobalFree(hDib);
+        free(bgra);
+        CloseClipboard();
+        return 0;
+    }
+
+    memset(dibHeader, 0, sizeof(BITMAPINFOHEADER));
+    dibHeader->biSize = sizeof(BITMAPINFOHEADER);
+    dibHeader->biWidth = width;
+    dibHeader->biHeight = -height; /* negative for top-down */
+    dibHeader->biPlanes = 1;
+    dibHeader->biBitCount = 32;
+    dibHeader->biCompression = BI_RGB;
+    dibHeader->biSizeImage = (DWORD)pixelDataSize;
+
+    unsigned char* dibPixels = (unsigned char*)(dibHeader + 1);
+    memcpy(dibPixels, bgra, pixelDataSize);
+
+    GlobalUnlock(hDib);
+
+    SIZE_T dibv5Size = sizeof(BITMAPV5HEADER) + pixelDataSize;
+    HGLOBAL hDibV5 = GlobalAlloc(GHND, dibv5Size);
+    if (hDibV5 == NULL) {
+        GlobalFree(hDib);
+        free(bgra);
+        CloseClipboard();
+        return 0;
+    }
+
+    BITMAPV5HEADER* dibV5Header = (BITMAPV5HEADER*)GlobalLock(hDibV5);
+    if (dibV5Header == NULL) {
+        GlobalFree(hDibV5);
+        GlobalFree(hDib);
+        free(bgra);
+        CloseClipboard();
+        return 0;
+    }
+
+    memset(dibV5Header, 0, sizeof(BITMAPV5HEADER));
+    dibV5Header->bV5Size = sizeof(BITMAPV5HEADER);
+    dibV5Header->bV5Width = width;
+    dibV5Header->bV5Height = -height;
+    dibV5Header->bV5Planes = 1;
+    dibV5Header->bV5BitCount = 32;
+    dibV5Header->bV5Compression = BI_BITFIELDS;
+    dibV5Header->bV5RedMask = 0x00ff0000;
+    dibV5Header->bV5GreenMask = 0x0000ff00;
+    dibV5Header->bV5BlueMask = 0x000000ff;
+    dibV5Header->bV5AlphaMask = 0xff000000;
+    dibV5Header->bV5CSType = 0x73524742u; /* 'sRGB' */
+    dibV5Header->bV5Intent = LCS_GM_IMAGES;
+    dibV5Header->bV5SizeImage = (DWORD)pixelDataSize;
+
+    unsigned char* dibV5Pixels = (unsigned char*)(dibV5Header + 1);
+    memcpy(dibV5Pixels, bgra, pixelDataSize);
+
+    GlobalUnlock(hDibV5);
+
+    HDC hdc = GetDC(NULL);
+    BITMAPINFO bmi = {0};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -height;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* sectionBits = NULL;
+    HBITMAP hBitmap = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &sectionBits, NULL, 0);
+    ReleaseDC(NULL, hdc);
+    if (hBitmap == NULL || sectionBits == NULL) {
+        if (hBitmap != NULL) {
+            DeleteObject(hBitmap);
+        }
+        GlobalFree(hDibV5);
+        GlobalFree(hDib);
+        free(bgra);
+        CloseClipboard();
+        return 0;
+    }
+
+    memcpy(sectionBits, bgra, pixelDataSize);
+
+    int dibOk = 0;
+    int dibV5Ok = 0;
+    int bmpOk = 0;
+
+    if (SetClipboardData(CF_DIB, hDib) != NULL) {
+        dibOk = 1;
+    } else {
+        GlobalFree(hDib);
+    }
+
+    if (SetClipboardData(CF_DIBV5, hDibV5) != NULL) {
+        dibV5Ok = 1;
+    } else {
+        GlobalFree(hDibV5);
+    }
+
+    if (SetClipboardData(CF_BITMAP, hBitmap) != NULL) {
+        bmpOk = 1;
+    } else {
+        DeleteObject(hBitmap);
+    }
+
     CloseClipboard();
-    return 1;
+    free(bgra);
+    return dibOk || dibV5Ok || bmpOk;
 }
 
 char** WinClip_GetFileDropList(int* count) {
